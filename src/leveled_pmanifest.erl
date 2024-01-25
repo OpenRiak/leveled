@@ -46,7 +46,8 @@
         levelzero_present/1,
         check_bloom/3,
         report_manifest_level/2,
-        snapshot_pids/1
+        snapshot_pids/1,
+        get_sstpids/1
         ]).      
 
 -export([
@@ -450,23 +451,28 @@ key_lookup(Manifest, LevelIdx, Key) ->
 -spec query_manifest(
     manifest(),
     leveled_codec:ledger_key(),
-    leveled_codec:ledger_key()) -> list().
+    leveled_codec:ledger_key())
+        -> list(
+            {lsm_level(),
+                list({next, manifest_entry(), leveled_codec:ledger_key()})}).
 query_manifest(Manifest, StartKey, EndKey) ->
     SetupFoldFun =
         fun(Level, Acc) ->
-            Pointers =
-                range_lookup(Manifest, Level, StartKey, EndKey),
-            case Pointers of
-                [] -> Acc;
-                PL -> Acc ++ [{Level, PL}]
+            case range_lookup(Manifest, Level, StartKey, EndKey) of
+                [] ->
+                    Acc;
+                Pointers ->
+                    [{Level, Pointers}|Acc]
             end
         end,
     lists:foldl(SetupFoldFun, [], lists:seq(0, ?MAX_LEVELS - 1)).
 
--spec range_lookup(manifest(), 
-                    integer(), 
-                    leveled_codec:ledger_key(), 
-                    leveled_codec:ledger_key()) -> list().
+-spec range_lookup(
+    manifest(), 
+    integer(), 
+    leveled_codec:ledger_key(), 
+    leveled_codec:ledger_key())
+        -> list({next, manifest_entry(), leveled_codec:ledger_key()}).
 %% @doc
 %% Return a list of manifest_entry pointers at this level which cover the
 %% key query range.
@@ -477,10 +483,11 @@ range_lookup(Manifest, LevelIdx, StartKey, EndKey) ->
         end,
     range_lookup_int(Manifest, LevelIdx, StartKey, EndKey, MakePointerFun).
 
--spec merge_lookup(manifest(), 
-                    integer(), 
-                    leveled_codec:ledger_key(), 
-                    leveled_codec:ledger_key()) -> list().
+-spec merge_lookup(
+    manifest(), 
+    integer(), 
+    leveled_codec:ledger_key(), 
+    leveled_codec:ledger_key()) -> list({next, manifest_entry(), all}).
 %% @doc
 %% Return a list of manifest_entry pointers at this level which cover the
 %% key query range, only all keys in the files should be included in the
@@ -493,8 +500,8 @@ merge_lookup(Manifest, LevelIdx, StartKey, EndKey) ->
     range_lookup_int(Manifest, LevelIdx, StartKey, EndKey, MakePointerFun).
 
 
--spec mergefile_selector(manifest(), integer(), selector_strategy()) 
-                                                        -> manifest_entry().
+-spec mergefile_selector(
+        manifest(), integer(), selector_strategy()) -> manifest_entry().
 %% @doc
 %% An algorithm for discovering which files to merge ....
 %% We can find the most optimal file:
@@ -510,13 +517,15 @@ mergefile_selector(Manifest, LevelIdx, _Strategy) when LevelIdx =< 1 ->
     Level = array:get(LevelIdx, Manifest#manifest.levels),
     lists:nth(leveled_rand:uniform(length(Level)), Level);
 mergefile_selector(Manifest, LevelIdx, random) ->
-    Level = leveled_tree:to_list(array:get(LevelIdx,
-                                            Manifest#manifest.levels)),
+    Level =
+        leveled_tree:to_list(
+            array:get(LevelIdx, Manifest#manifest.levels)),
     {_SK, ME} = lists:nth(leveled_rand:uniform(length(Level)), Level),
     ME;
 mergefile_selector(Manifest, LevelIdx, {grooming, ScoringFun}) ->
-    Level = leveled_tree:to_list(array:get(LevelIdx,
-                                            Manifest#manifest.levels)),
+    Level =
+        leveled_tree:to_list(
+            array:get(LevelIdx, Manifest#manifest.levels)),
     SelectorFun =
         fun(_I, Acc) ->
             {_SK, ME} = lists:nth(leveled_rand:uniform(length(Level)), Level),
@@ -554,12 +563,12 @@ add_snapshot(Manifest, Pid, Timeout) ->
     ManSQN = Manifest#manifest.manifest_sqn,
     case Manifest#manifest.min_snapshot_sqn of
         0 ->
-            Manifest#manifest{snapshots = SnapList0,
-                                min_snapshot_sqn = ManSQN};
+            Manifest#manifest{
+                snapshots = SnapList0, min_snapshot_sqn = ManSQN};
         N ->
             N0 = min(N, ManSQN),
-            Manifest#manifest{snapshots = SnapList0,
-                                min_snapshot_sqn = N0}
+            Manifest#manifest{
+                snapshots = SnapList0, min_snapshot_sqn = N0}
     end.
 
 -spec release_snapshot(manifest(), pid()|atom()) -> manifest().
@@ -698,6 +707,31 @@ check_bloom(Manifest, FP, Hash) ->
 %% Return a list of snapshot_pids - to be shutdown on shutdown
 snapshot_pids(Manifest) ->
     lists:map(fun(S) -> element(1, S) end, Manifest#manifest.snapshots).
+
+-spec get_sstpids(manifest()) -> list(pid()).
+%% @doc
+%% Return a list of all SST PIDs in the current manifest
+get_sstpids(Manifest) ->
+    FoldFun =
+        fun(I, Acc) ->
+            Level = array:get(I, Manifest#manifest.levels),
+            LevelAsList =
+                case I of
+                    I when I > 1 ->
+                        leveled_tree:to_list(Level);
+                    _ ->
+                        Level
+                end,
+            Pids =
+                lists:map(
+                    fun(MaybeME) ->
+                        ME = get_manifest_entry(MaybeME),
+                        ME#manifest_entry.owner
+                    end,
+                    LevelAsList),
+            Acc ++ Pids
+        end,
+    lists:foldl(FoldFun, [], lists:seq(0, Manifest#manifest.basement)).
 
 %%%============================================================================
 %%% Internal Functions
