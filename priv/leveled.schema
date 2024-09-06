@@ -43,11 +43,21 @@
 ]}.
 
 %% @doc Compression method
-%% Can be lz4 or native (which will use the Erlang native zlib compression)
-%% within term_to_binary
+%% Can be lz4, zstd or native (which will use the Erlang native zlib
+%% compression) within term_to_binary
 {mapping, "leveled.compression_method", "leveled.compression_method", [
-  {datatype, {enum, [native, lz4, none]}},
+  {datatype, {enum, [native, lz4, zstd, none]}},
   {default, native}
+]}.
+
+%% @doc Ledger compression
+%% If an alternative compression method is preferred specifically for the
+%% ledger, it can be specified here.  Default is as_store - use whatever method
+%% has been defined in leveled.compression.method.  Alternatives are native,
+%% lz4, ztsd and none
+{mapping, "leveled.ledger_compression", "leveled.ledger_compression", [
+  {datatype, {enum, [as_store, native, lz4, zstd, none]}},
+  {default, as_store}
 ]}.
 
 %% @doc Compression point
@@ -71,13 +81,18 @@
 ]}.
 
 %% @doc Log level
-%% Can be debug, info, warn, error or critical
+%% Can be debug, info, warning, error or critical
 %% Set the minimum log level to be used within leveled.  Leveled will log many
 %% lines to allow for stats to be etracted by those using log indexers such as
-%% Splunk
+%% Splunk.
+%% Logging will be via erlang logger, and so the destination will be defined
+%% by the configured log handlers of the erlang node which starts the bookie.
+%% All logs are from the leveled_log module, and so specific handling can be
+%% managed using filters on the first element of the MFS metadata, or setting
+%% the log level for that specific module.
 {mapping, "leveled.log_level", "leveled.log_level", [
   {default, info},
-  {datatype, atom}
+  {datatype, {enum, [debug, info, warning, error, critical]}}
 ]}.
 
 %% @doc The approximate size (in bytes) when a Journal file should be rolled.

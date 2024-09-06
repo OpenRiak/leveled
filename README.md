@@ -64,9 +64,13 @@ The book_start method should respond once startup is complete.  The [leveled_boo
 
 Running in Riak requires Riak 2.9 or beyond, which is available from January 2019.
 
-There are three main branches:
+There are two main branches under active development:
 
-[`develop-3.1`  - default](https://github.com/martinsumner/leveled/tree/develop-3.1): Target for the Riak 3.1 release with support for OTP 22 and OTP 24;
+[`develop-3.4`  - default](https://github.com/martinsumner/leveled/tree/develop-3.4): Target for the Riak 3.4 release with support for OTP 24 and OTP 26;
+
+[`develop-3.1`](https://github.com/martinsumner/leveled/tree/develop-3.1): Target for the Riak 3.2 release with support for OTP 22 and OTP 24.
+
+There are two legacy branches, used in older versions of Riak:
 
 [`develop-3.0`](https://github.com/martinsumner/leveled/tree/develop-3.0): Used in the Riak 3.0 release with support for OTP 20 and OTP 22;
 
@@ -78,8 +82,8 @@ In order to contribute to leveled, fork the repository, make a branch for your c
 
 To have rebar3 execute the full set of tests, run:
 
-```rebar3 as test do xref, dialyzer, cover --reset, eunit --cover, ct --cover, cover --verbose```
+```./rebar3 do xref, dialyzer, cover --reset, eunit --cover, ct --cover, cover --verbose```
 
 For those with a Quickcheck license, property-based tests can also be run using:
 
-```rebar3 as eqc do eunit --module=leveled_simpleeqc, eunit --module=leveled_statemeqc```
+```./rebar3 as eqc do eunit --module=leveled_simpleeqc, eunit --module=leveled_statemeqc```

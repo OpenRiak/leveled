@@ -1,7 +1,6 @@
 -module(basic_SUITE).
--include_lib("common_test/include/ct.hrl").
--include("include/leveled.hrl").
--export([all/0]).
+-include("leveled.hrl").
+-export([all/0, init_per_suite/1, end_per_suite/1]).
 -export([simple_put_fetch_head_delete/1,
             many_put_fetch_head/1,
             journal_compaction/1,
@@ -14,7 +13,8 @@
             bigjournal_littlejournal/1,
             bigsst_littlesst/1,
             safereaderror_startup/1,
-            remove_journal_test/1
+            remove_journal_test/1,
+            bigpcl_bucketlist/1
             ]).
 
 all() -> [
@@ -30,9 +30,17 @@ all() -> [
             bigjournal_littlejournal,
             bigsst_littlesst,
             safereaderror_startup,
-            remove_journal_test
+            remove_journal_test,
+            bigpcl_bucketlist
             ].
 
+
+init_per_suite(Config) ->
+    testutil:init_per_suite([{suite, "basic"}|Config]),
+    Config.
+
+end_per_suite(Config) ->
+    testutil:end_per_suite(Config).
 
 simple_put_fetch_head_delete(_Config) ->
     io:format("simple test with info and no forced logs~n"),
@@ -386,6 +394,8 @@ fetchput_snapshot(_Config) ->
     RootPath = testutil:reset_filestructure(),
     StartOpts1 = [{root_path, RootPath},
                     {max_journalsize, 30000000},
+                    {cache_size, 2000},
+                    {max_pencillercachesize, 16000},
                     {sync_strategy, none}],
     {ok, Bookie1} = leveled_bookie:book_start(StartOpts1),
     {TestObject, TestSpec} = testutil:generate_testobject(),
@@ -929,7 +939,7 @@ space_clear_ondelete(_Config) ->
     true = PointB_Journals < length(FNsA_J),
     true = length(strip_nonsst(FNsD_L)) < length(strip_nonsst(FNsA_L)),
     true = length(strip_nonsst(FNsD_L)) < length(strip_nonsst(FNsB_L)),
-    true = length(strip_nonsst(FNsD_L)) < length(strip_nonsst(FNsC_L)),
+    true = length(strip_nonsst(FNsD_L)) =< length(strip_nonsst(FNsC_L)),
     true = length(strip_nonsst(FNsD_L)) == 0.
 
 
@@ -1034,25 +1044,36 @@ remove_journal_test(_Config) ->
     ok = leveled_bookie:book_destroy(Bookie3).
 
 
-
 many_put_fetch_switchcompression(_Config) ->
+    {T0, ok} =
+        timer:tc(fun many_put_fetch_switchcompression_tester/1, [native]),
+    {T1, ok} =
+        timer:tc(fun many_put_fetch_switchcompression_tester/1, [lz4]),
+    {T2, ok} =
+        timer:tc(fun many_put_fetch_switchcompression_tester/1, [zstd]),
+    io:format("Test timings native=~w lz4=~w, zstd=~w", [T0, T1, T2]).
+
+many_put_fetch_switchcompression_tester(CompressionMethod) ->
     RootPath = testutil:reset_filestructure(),
     StartOpts1 = [{root_path, RootPath},
                     {max_pencillercachesize, 16000},
                     {max_journalobjectcount, 30000},
                     {compression_level, 3},
                     {sync_strategy, testutil:sync_strategy()},
-                    {compression_method, native}],
+                    {compression_method, native},
+                    {ledger_compression, none}],
     StartOpts2 = [{root_path, RootPath},
                     {max_pencillercachesize, 24000},
                     {max_journalobjectcount, 30000},
                     {sync_strategy, testutil:sync_strategy()},
-                    {compression_method, lz4}],
+                    {compression_method, CompressionMethod},
+                    {ledger_compression, as_store}],
     StartOpts3 = [{root_path, RootPath},
                     {max_pencillercachesize, 16000},
                     {max_journalobjectcount, 30000},
                     {sync_strategy, testutil:sync_strategy()},
-                    {compression_method, none}],
+                    {compression_method, none},
+                    {ledger_compression, as_store}],
     
     
     {ok, Bookie1} = leveled_bookie:book_start(StartOpts1),
@@ -1171,7 +1192,6 @@ many_put_fetch_switchcompression(_Config) ->
 
     ok = leveled_bookie:book_destroy(Bookie6).
 
-
 safereaderror_startup(_Config) ->
     RootPath = testutil:reset_filestructure(),
     StartOpts1 = [{root_path, RootPath}, 
@@ -1198,3 +1218,77 @@ safereaderror_startup(_Config) ->
     io:format("Read back ~w", [ReadBack]),
     true = ReadBack == Obj2,
     ok = leveled_bookie:book_close(Bookie2).
+
+bigpcl_bucketlist(_Config) ->
+    %% https://github.com/martinsumner/leveled/issues/326
+    %% In OTP 22+ there appear to be issues with anonymous functions which
+    %% have a reference to loop state, requiring a copy of all the loop state
+    %% to be made when returning the function.
+    %% This test creates  alarge loop state on the leveled_penciller to prove
+    %% this.
+    %% The problem can be resolved simply by renaming the element of the loop
+    %% state using within the anonymous function.
+    RootPath = testutil:reset_filestructure(),
+    BucketCount = 500,
+    ObjectCount = 100,
+    StartOpts1 = [{root_path, RootPath},
+                    {max_journalsize, 50000000},
+                    {cache_size, 4000},
+                    {max_pencillercachesize, 128000},
+                    {max_sstslots, 256},
+                    {sync_strategy, testutil:sync_strategy()}],
+    {ok, Bookie1} = leveled_bookie:book_start(StartOpts1),
+    BucketList =
+        lists:map(fun(I) -> list_to_binary(integer_to_list(I)) end,
+                    lists:seq(1, BucketCount)),
+
+    MapFun =
+        fun(B) ->
+            testutil:generate_objects(ObjectCount, 1, [], 
+                                        leveled_rand:rand_bytes(100), 
+                                        fun() -> [] end, 
+                                        B)
+        end,
+    ObjLofL = lists:map(MapFun, BucketList),
+    lists:foreach(fun(ObjL) -> testutil:riakload(Bookie1, ObjL) end, ObjLofL),
+    BucketFold =
+        fun(B, _K, _V, Acc) ->
+            case sets:is_element(B, Acc) of
+                true ->
+                    Acc;
+                false ->
+                    sets:add_element(B, Acc)
+            end
+        end,
+    FBAccT = {BucketFold, sets:new()},
+
+    {async, BucketFolder1} = 
+        leveled_bookie:book_headfold(Bookie1,
+                                        ?RIAK_TAG,
+                                        {bucket_list, BucketList},
+                                        FBAccT,
+                                        false, false, false),
+
+    {FoldTime1, BucketList1} = timer:tc(BucketFolder1, []),
+    true = BucketCount == sets:size(BucketList1),
+    ok = leveled_bookie:book_close(Bookie1),
+
+    {ok, Bookie2} = leveled_bookie:book_start(StartOpts1),
+    
+    {async, BucketFolder2} = 
+        leveled_bookie:book_headfold(Bookie2,
+                                        ?RIAK_TAG,
+                                        {bucket_list, BucketList},
+                                        FBAccT,
+                                        false, false, false),
+    {FoldTime2, BucketList2} = timer:tc(BucketFolder2, []),
+    true = BucketCount == sets:size(BucketList2),
+
+    io:format("Fold pre-close ~w ms post-close ~w ms~n",
+                [FoldTime1 div 1000, FoldTime2 div 1000]),
+
+    true = FoldTime1 < 10 * FoldTime2,
+    %% The fold in-memory should be the same order of magnitude of response
+    %% time as the fold post-persistence
+
+    ok = leveled_bookie:book_destroy(Bookie2).

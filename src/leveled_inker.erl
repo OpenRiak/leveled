@@ -80,12 +80,11 @@
 %% TODO: how to instruct the files to close is tbd
 %%
 
-
 -module(leveled_inker).
 
 -behaviour(gen_server).
 
--include("include/leveled.hrl").
+-include("leveled.hrl").
 
 -export([init/1,
         handle_call/3,
@@ -118,13 +117,19 @@
         ink_loglevel/2,
         ink_addlogs/2,
         ink_removelogs/2,
-        ink_getjournalsqn/1]).
+        ink_getjournalsqn/1,
+        ink_getcdbpids/1,
+        ink_getclerkpid/1
+    ]).
 
 -export([filepath/2, filepath/3]).
 
 -ifdef(TEST).
--export([build_dummy_journal/0, clean_testdir/1]).
+-export(
+    [build_dummy_journal/0, clean_testdir/1]
+).
 -endif.
+
 
 -define(MANIFEST_FP, "journal_manifest").
 -define(FILES_FP, "journal_files").
@@ -133,6 +138,7 @@
 -define(JOURNAL_FILEX, "cdb").
 -define(PENDING_FILEX, "pnd").
 -define(TEST_KC, {[], infinity}).
+-define(SHUTDOWN_LOOPS, 10).
 -define(SHUTDOWN_PAUSE, 10000).
     % How long to wait for snapshots to be released on shutdown
     % before forcing closure of snapshots
@@ -154,7 +160,8 @@
                 compression_method = native :: lz4|native|none,
                 compress_on_receipt = false :: boolean(),
                 snap_timeout :: pos_integer() | undefined, % in seconds
-                source_inker :: pid() | undefined}).
+                source_inker :: pid() | undefined,
+                shutdown_loops = ?SHUTDOWN_LOOPS :: non_neg_integer()}).
 
 
 -type inker_options() :: #inker_options{}.
@@ -478,6 +485,19 @@ ink_removelogs(Pid, ForcedLogs) ->
 ink_getjournalsqn(Pid) ->
     gen_server:call(Pid, get_journalsqn, infinity).
 
+-spec ink_getcdbpids(pid()) -> list(pid()).
+%% @doc
+%% Used for profiling in tests - get a list of SST PIDs to profile
+ink_getcdbpids(Pid) ->
+    gen_server:call(Pid, get_cdbpids).
+
+-spec ink_getclerkpid(pid()) -> pid().
+%% @doc
+%% Used for profiling in tests - get the clerk PID to profile
+ink_getclerkpid(Pid) ->
+    gen_server:call(Pid, get_clerkpid).
+
+
 %%%============================================================================
 %%% gen_server callbacks
 %%%============================================================================
@@ -671,6 +691,11 @@ handle_call({check_sqn, LedgerSQN}, _From, State) ->
     end;
 handle_call(get_journalsqn, _From, State) ->
     {reply, {ok, State#state.journal_sqn}, State};
+handle_call(get_cdbpids, _From, State) ->
+    CDBPids = leveled_imanifest:get_cdbpids(State#state.manifest),
+    {reply, [State#state.active_journaldb|CDBPids], State};
+handle_call(get_clerkpid, _From, State) ->
+    {reply, State#state.clerk, State};
 handle_call(close, _From, State=#state{is_snapshot=Snap}) when Snap == true ->
     ok = ink_releasesnapshot(State#state.source_inker, self()),
     {stop, normal, ok, State};
@@ -710,9 +735,12 @@ handle_cast({clerk_complete, ManifestSnippet, FilesToDelete}, State) ->
     NewManifestSQN = State#state.manifest_sqn + 1,
     leveled_imanifest:printer(Man1),
     leveled_imanifest:writer(Man1, NewManifestSQN, State#state.root_path),
-    ok = leveled_iclerk:clerk_promptdeletions(State#state.clerk,
-                                                NewManifestSQN,
-                                                FilesToDelete),
+    lists:foreach(
+        fun({_SQN, _FN, J2D, _LK}) ->
+            leveled_cdb:cdb_deletepending(J2D, NewManifestSQN, self())
+        end,
+        FilesToDelete
+    ),
     {noreply, State#state{manifest=Man1,
                             manifest_sqn=NewManifestSQN,
                             pending_removals=FilesToDelete,
@@ -786,16 +814,25 @@ handle_cast({remove_logs, ForcedLogs}, State) ->
 handle_cast({maybe_defer_shutdown, ShutdownType, From}, State) ->
     case length(State#state.registered_snapshots) of
         0 ->
-            ok;
+            gen_server:cast(self(), {complete_shutdown, ShutdownType, From}),
+            {noreply, State};
         N ->
             % Whilst this process sleeps, then any remaining snapshots may
             % release and have their release messages queued before the
             % complete_shutdown cast is sent
-            leveled_log:log(i0026, [N]),
-            timer:sleep(?SHUTDOWN_PAUSE)
-    end,
-    gen_server:cast(self(), {complete_shutdown, ShutdownType, From}),
-    {noreply, State};
+            case State#state.shutdown_loops of
+                LoopCount when LoopCount > 0 ->
+                    leveled_log:log(i0026, [N]),
+                    timer:sleep(?SHUTDOWN_PAUSE div ?SHUTDOWN_LOOPS),
+                    gen_server:cast(
+                        self(), {maybe_defer_shutdown, ShutdownType, From}),
+                    {noreply, State#state{shutdown_loops = LoopCount - 1}};
+                0 ->
+                    gen_server:cast(
+                        self(), {complete_shutdown, ShutdownType, From}),
+                    {noreply, State}
+            end
+        end;
 handle_cast({complete_shutdown, ShutdownType, From}, State) ->
     lists:foreach(
         fun(SnapPid) -> ok = ink_snapclose(SnapPid) end,

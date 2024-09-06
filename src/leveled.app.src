@@ -4,9 +4,10 @@
   {vsn, git},
   {registered, []},
   {applications, [
-                  lz4,
                   kernel,
-                  stdlib
+                  stdlib,
+                  lz4,
+                  zstd
                  ]},
   {maintainers, ["Martin Sumner"]},
   {licenses, ["Apache"]},

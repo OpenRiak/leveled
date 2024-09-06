@@ -2,7 +2,10 @@
 
 -include("../include/leveled.hrl").
 
+-export([init_per_suite/1, end_per_suite/1]).
+
 -export([book_riakput/3,
+            book_tempriakput/4,
             book_riakdelete/4,
             book_riakget/3,
             book_riakhead/3,
@@ -44,11 +47,13 @@
             update_some_objects/3,
             delete_some_objects/3,
             put_indexed_objects/3,
+            put_indexed_objects/4,
             put_altered_indexed_objects/3,
             put_altered_indexed_objects/4,
             put_altered_indexed_objects/5,
             check_indexed_objects/4,
             rotating_object_check/3,
+            rotation_withnocheck/6,
             corrupt_journal/5,
             restore_file/2,
             restore_topending/2,
@@ -65,7 +70,7 @@
             compact_and_wait/1]).
 
 -define(RETURN_TERMS, {true, undefined}).
--define(SLOWOFFER_DELAY, 10).
+-define(SLOWOFFER_DELAY, 40).
 -define(V1_VERS, 1).
 -define(MAGIC, 53). % riak_kv -> riak_object
 -define(MD_VTAG,     <<"X-Riak-VTag">>).
@@ -87,6 +92,59 @@
           vclock,
           updatemetadata=dict:store(clean, true, dict:new()),
           updatevalue :: term()}).
+
+
+init_per_suite(Config) ->
+    LogTemplate = [time, " log_level=", level, " ", msg, "\n"],
+    LogFormatter =
+        {
+            logger_formatter,
+                #{
+                    time_designator => $\s,
+                    template => LogTemplate
+                }
+        },
+    {suite, SUITEName} = lists:keyfind(suite, 1, Config),
+    FileName = "leveled_" ++ SUITEName ++ "_ct.log",
+    LogConfig =
+        #{
+            config =>
+                #{
+                    file => FileName,
+                    max_no_files => 5
+                }
+        },
+    
+    LogFilter =
+        fun(LogEvent, LogType) ->
+            Meta = maps:get(meta, LogEvent),
+            case maps:get(log_type, Meta, not_found) of
+                LogType ->
+                    LogEvent;
+                _ ->
+                    ignore
+            end
+        end,
+
+    ok = logger:add_handler(logfile, logger_std_h, LogConfig),
+    ok = logger:set_handler_config(logfile, formatter, LogFormatter),
+    ok = logger:set_handler_config(logfile, level, info),
+    ok = logger:add_handler_filter(logfile, type_filter, {LogFilter, backend}),
+
+    ok = logger:set_handler_config(default, level, notice),
+    ok = logger:set_handler_config(cth_log_redirect, level, notice),
+
+    ok = logger:set_primary_config(level, info),
+
+    Config.
+
+end_per_suite(_Config) ->
+    ok = logger:remove_handler(logfile),
+    ok = logger:set_primary_config(level, notice),
+    ok = logger:set_handler_config(default, level, all),
+    ok = logger:set_handler_config(cth_log_redirect, level, all),
+
+    ok.
 
 riak_object(Bucket, Key, Value, MetaData) ->
     Content = #r_content{metadata=dict:from_list(MetaData), value=Value},
@@ -179,6 +237,16 @@ book_riakput(Pid, RiakObject, IndexSpecs) ->
                             to_binary(v1, RiakObject),
                             IndexSpecs,
                             ?RIAK_TAG).
+
+book_tempriakput(Pid, RiakObject, IndexSpecs, TTL) ->
+    leveled_bookie:book_tempput(
+        Pid,
+        RiakObject#r_object.bucket,
+        RiakObject#r_object.key,
+        to_binary(v1, RiakObject),
+        IndexSpecs,
+        ?RIAK_TAG,
+        TTL).
 
 book_riakdelete(Pid, Bucket, Key, IndexSpecs) ->
     leveled_bookie:book_put(Pid, Bucket, Key, delete, IndexSpecs, ?RIAK_TAG).
@@ -282,8 +350,11 @@ reset_filestructure(RootPath) when is_list(RootPath) ->
     reset_filestructure(0, RootPath).
 
 reset_filestructure(Wait, RootPath) ->
-    io:format("Waiting ~w ms to give a chance for all file closes " ++
-                 "to complete~n", [Wait]),
+    io:format(
+        "Waiting ~w ms to give a chance for all file closes "
+        "to complete~n",
+        [Wait]
+    ),
     timer:sleep(Wait),
     filelib:ensure_dir(RootPath ++ "/journal/"),
     filelib:ensure_dir(RootPath ++ "/ledger/"),
@@ -298,8 +369,11 @@ wait_for_compaction(Bookie) ->
                             false ->
                                 false;
                             true ->
-                                io:format("Loop ~w waiting for journal "
-                                    ++ "compaction to complete~n", [X]),
+                                io:format(
+                                    "Loop ~w waiting for journal "
+                                    "compaction to complete~n",
+                                    [X]
+                                ),
                                 timer:sleep(5000),
                                 F(Bookie)
                         end end,
@@ -433,11 +507,15 @@ get_compressiblevalue() ->
     Selector = [{1, S1}, {2, S2}, {3, S3}, {4, S4},
                 {5, S5}, {6, S6}, {7, S7}, {8, S8}],
     L = lists:seq(1, 1024),
-    lists:foldl(fun(_X, Acc) ->
-                    {_, Str} = lists:keyfind(leveled_rand:uniform(8), 1, Selector),
-                    Acc ++ Str end,
-                "",
-                L).
+    iolist_to_binary(
+        lists:foldl(
+            fun(_X, Acc) ->
+                {_, Str} = lists:keyfind(leveled_rand:uniform(8), 1, Selector),
+            [Str|Acc] end,
+            [""],
+            L
+        )
+    ).
 
 generate_smallobjects(Count, KeyNumber) ->
     generate_objects(Count, KeyNumber, [], leveled_rand:rand_bytes(512)).
@@ -534,16 +612,22 @@ set_object(Bucket, Key, Value, IndexGen, Indexes2Remove) ->
 set_object(Bucket, Key, Value, IndexGen, Indexes2Remove, IndexesNotToRemove) ->
     IdxSpecs = IndexGen(),
     Indexes =
-        lists:map(fun({add, IdxF, IdxV}) -> {IdxF, IdxV} end,
-                    IdxSpecs ++ IndexesNotToRemove),
+        lists:map(
+            fun({add, IdxF, IdxV}) -> {IdxF, IdxV} end,
+            lists:flatten([IndexesNotToRemove, IdxSpecs])
+        ),
     Obj = {Bucket,
             Key,
             Value,
-            IdxSpecs ++
-                lists:map(fun({add, IdxF, IdxV}) -> {remove, IdxF, IdxV} end,
-                            Indexes2Remove),
-            [{<<"MDK">>, "MDV" ++ Key},
-                {<<"MDK2">>, "MDV" ++ Key},
+            lists:flatten(
+                IdxSpecs,
+                lists:map(
+                    fun({add, IdxF, IdxV}) -> {remove, IdxF, IdxV} end,
+                    Indexes2Remove
+                )
+            ),
+            [{<<"MDK">>, iolist_to_binary([<<"MDV">>, Key])},
+                {<<"MDK2">>, iolist_to_binary([<<"MDV">>, Key])},
                 {?MD_LASTMOD, os:timestamp()},
                 {?MD_INDEX, Indexes}]},
     {B1, K1, V1, DeltaSpecs, MD} = Obj,
@@ -624,8 +708,10 @@ get_value(ObjectBin) ->
             <<SibLength:32/integer, Rest2/binary>> = SibsBin,
             <<ContentBin:SibLength/binary, _MetaBin/binary>> = Rest2,
             case ContentBin of
-                <<0, ContentBin0/binary>> ->
-                    binary_to_term(ContentBin0)
+                <<0:8/integer, ContentBin0/binary>> ->
+                    binary_to_term(ContentBin0);
+                <<1:8/integer, ContentAsIs/binary>> ->
+                    ContentAsIs
             end;
         N ->
             io:format("SibCount of ~w with ObjectBin ~w~n", [N, ObjectBin]),
@@ -678,21 +764,24 @@ load_objects(ChunkSize, GenList, Bookie, TestObject, Generator, SubListL) ->
 
 
 get_randomindexes_generator(Count) ->
-    Generator = fun() ->
-            lists:map(fun(X) ->
-                                {add,
-                                    "idx" ++ integer_to_list(X) ++ "_bin",
-                                    get_randomdate() ++ get_randomname()} end,
-                        lists:seq(1, Count))
+    Generator =
+        fun() ->
+            lists:map(
+                fun(X) ->
+                    {add,
+                        iolist_to_binary(["idx", integer_to_list(X), "_bin"]),
+                        iolist_to_binary([get_randomdate(), get_randomname()])}
+                end,
+                lists:seq(1, Count))
         end,
     Generator.
 
 name_list() ->
     [{1, "Sophia"}, {2, "Emma"}, {3, "Olivia"}, {4, "Ava"},
-            {5, "Isabella"}, {6, "Mia"}, {7, "Zoe"}, {8, "Lily"},
-            {9, "Emily"}, {10, "Madelyn"}, {11, "Madison"}, {12, "Chloe"},
-            {13, "Charlotte"}, {14, "Aubrey"}, {15, "Avery"},
-            {16, "Abigail"}].
+        {5, "Isabella"}, {6, "Mia"}, {7, "Zoe"}, {8, "Lily"},
+        {9, "Emily"}, {10, "Madelyn"}, {11, "Madison"}, {12, "Chloe"},
+        {13, "Charlotte"}, {14, "Aubrey"}, {15, "Avery"},
+        {16, "Abigail"}].
 
 get_randomname() ->
     NameList = name_list(),
@@ -725,7 +814,7 @@ check_indexed_objects(Book, B, KSpecL, V) ->
             fun({K, Spc}) ->
                 {ok, O} = book_riakget(Book, B, K),
                 V = testutil:get_value(O),
-                {add, "idx1_bin", IdxVal} = lists:keyfind(add, 1, Spc),
+                {add, <<"idx1_bin">>, IdxVal} = lists:keyfind(add, 1, Spc),
                 {IdxVal, K}
             end,
             KSpecL),
@@ -736,7 +825,7 @@ check_indexed_objects(Book, B, KSpecL, V) ->
             {index_query,
                 B,
                 {fun foldkeysfun/3, []},
-                {"idx1_bin", "0", "|"},
+                {<<"idx1_bin">>, <<"0">>, <<"|">>},
                 ?RETURN_TERMS}),
     SW = os:timestamp(),
     {async, Fldr} = R,
@@ -754,6 +843,9 @@ check_indexed_objects(Book, B, KSpecL, V) ->
 
 put_indexed_objects(Book, Bucket, Count) ->
     V = get_compressiblevalue(),
+    put_indexed_objects(Book, Bucket, Count, V).
+
+put_indexed_objects(Book, Bucket, Count, V) ->
     IndexGen = get_randomindexes_generator(1),
     SW = os:timestamp(),
     ObjL1 = 
@@ -780,11 +872,12 @@ put_altered_indexed_objects(Book, Bucket, KSpecL, RemoveOld2i) ->
     put_altered_indexed_objects(Book, Bucket, KSpecL, RemoveOld2i, V).
 
 put_altered_indexed_objects(Book, Bucket, KSpecL, RemoveOld2i, V) ->
+    SW = os:timestamp(),
     IndexGen = get_randomindexes_generator(1),
-    
+    ThisProcess = self(),
     FindAdditionFun = fun(SpcItem) -> element(1, SpcItem) == add end,
     MapFun = 
-        fun({K, Spc}) ->
+        fun({K, Spc}, Acc) ->
             OldSpecs = lists:filter(FindAdditionFun, Spc),
             {RemoveSpc, AddSpc} =
                 case RemoveOld2i of
@@ -793,26 +886,45 @@ put_altered_indexed_objects(Book, Bucket, KSpecL, RemoveOld2i, V) ->
                     false ->
                         {[], OldSpecs}
                 end,
-            {O, DeltaSpecs} =
-                set_object(Bucket, K, V,
-                            IndexGen, RemoveSpc, AddSpc),
-            % DeltaSpecs should be new indexes added, and any old indexes which
-            % have been removed by this change where RemoveOld2i is true.
-            %
-            % The actual indexes within the object should reflect any history
-            % of indexes i.e. when RemoveOld2i is false.
-            %
-            % The [{Key, SpecL}] returned should accrue additions over loops if
-            % RemoveOld2i is false
-            case book_riakput(Book, O, DeltaSpecs) of
-                ok -> ok;
-                pause -> timer:sleep(?SLOWOFFER_DELAY)
-            end,
+            PutFun =
+                fun() ->
+                    {O, DeltaSpecs} =
+                        set_object(
+                            Bucket, K, V, IndexGen, RemoveSpc, AddSpc),
+                    % DeltaSpecs should be new indexes added, and any old
+                    % indexes which have been removed by this change where
+                    % RemoveOld2i is true.
+                    %
+                    % The actual indexes within the object should reflect any
+                    % history of indexes i.e. when RemoveOld2i is false.
+                    %
+                    % The [{Key, SpecL}] returned should accrue additions over
+                    % loops if RemoveOld2i is false
+                    R =
+                        case book_riakput(Book, O, DeltaSpecs) of
+                            ok ->
+                                ok;
+                            pause ->
+                                timer:sleep(?SLOWOFFER_DELAY),
+                                pause
+                        end,
+                    ThisProcess ! {R, DeltaSpecs}
+                end,
+            spawn(PutFun),
+            AccOut =
+                receive
+                    {ok, NewSpecs} -> Acc;
+                    {pause, NewSpecs} -> Acc + 1
+                end,
             % Note that order in the SpecL is important, as
             % check_indexed_objects, needs to find the latest item added
-            {K, DeltaSpecs ++ AddSpc}
+            {{K, lists:append(NewSpecs, AddSpc)}, AccOut}
         end,
-    RplKSpecL = lists:map(MapFun, KSpecL),
+    {RplKSpecL, Pauses} = lists:mapfoldl(MapFun, 0, KSpecL),
+    io:format(
+        "Altering ~w objects took ~w ms with ~w pauses~n",
+        [length(KSpecL), timer:now_diff(os:timestamp(), SW) div 1000, Pauses]
+    ),
     {RplKSpecL, V}.
 
 rotating_object_check(RootPath, B, NumberOfObjects) ->
@@ -837,6 +949,12 @@ rotating_object_check(RootPath, B, NumberOfObjects) ->
     ok = leveled_bookie:book_close(Book2),
     ok.
     
+rotation_withnocheck(Book1, B, NumberOfObjects, V1, V2, V3) ->
+    {KSpcL1, _V1} = put_indexed_objects(Book1, B, NumberOfObjects, V1),
+    {KSpcL2, _V2} = put_altered_indexed_objects(Book1, B, KSpcL1, true, V2),
+    {_KSpcL3, _V3} = put_altered_indexed_objects(Book1, B, KSpcL2, true, V3),
+    ok.
+
 corrupt_journal(RootPath, FileName, Corruptions, BasePosition, GapSize) ->
     OriginalPath = RootPath ++ "/journal/journal_files/" ++ FileName,
     BackupPath = RootPath ++ "/journal/journal_files/" ++
@@ -894,17 +1012,22 @@ compact_and_wait(Book) ->
 compact_and_wait(Book, WaitForDelete) ->
     ok = leveled_bookie:book_compactjournal(Book, 30000),
     F = fun leveled_bookie:book_islastcompactionpending/1,
-    lists:foldl(fun(X, Pending) ->
-                        case Pending of
-                            false ->
-                                false;
-                            true ->
-                                io:format("Loop ~w waiting for journal "
-                                    ++ "compaction to complete~n", [X]),
-                                timer:sleep(20000),
-                                F(Book)
-                        end end,
-                    true,
-                    lists:seq(1, 15)),
+    lists:foldl(
+        fun(X, Pending) ->
+            case Pending of
+                false ->
+                    false;
+                true ->
+                    io:format(
+                        "Loop ~w waiting for journal "
+                        "compaction to complete~n",
+                        [X]
+                    ),
+                    timer:sleep(20000),
+                    F(Book)
+            end
+        end,
+        true,
+        lists:seq(1, 15)),
     io:format("Waiting for journal deletes~n"),
     timer:sleep(WaitForDelete).
