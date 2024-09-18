@@ -18,7 +18,6 @@
         strip_to_keyseqonly/1,
         strip_to_indexdetails/1,
         striphead_to_v1details/1,
-        is_active/3,
         endkey_passed/2,
         key_dominates/2,
         maybe_reap_expiredkey/2,
@@ -48,10 +47,10 @@
         to_lookup/1,
         next_key/1,
         return_proxy/4,
-        get_metadata/1]).         
-
--define(LMD_FORMAT, "~4..0w~2..0w~2..0w~2..0w~2..0w").
--define(NRT_IDX, "$aae.").
+        get_metadata/1,
+        maybe_accumulate/5,
+        accumulate_index/2,
+        count_tombs/2]).         
 
 -type tag() :: 
         leveled_head:object_tag()|?IDX_TAG|?HEAD_TAG|atom().
@@ -106,7 +105,7 @@
 -type object_spec() ::
         object_spec_v0()|object_spec_v1().
 -type compression_method() ::
-        lz4|native|none.
+        lz4|native|zstd|none.
 -type index_specs() ::
         list({add|remove, any(), any()}).
 -type journal_keychanges() :: 
@@ -251,22 +250,79 @@ striphead_to_v1details(V) ->
 get_metadata(LV) ->
     element(4, LV).
 
--spec key_dominates(ledger_kv(), ledger_kv()) -> 
-    left_hand_first|right_hand_first|left_hand_dominant|right_hand_dominant.
+-spec maybe_accumulate(
+        list(leveled_codec:ledger_kv()),
+        term(),
+        non_neg_integer(),
+        {pos_integer(), {non_neg_integer(), non_neg_integer()|infinity}},
+        leveled_penciller:pclacc_fun())
+            -> {term(), non_neg_integer()}.
+%% @doc
+%% Make an accumulation decision based on the date range and also the expiry
+%% status of the ledger key and value  Needs to handle v1 and v2 values.  When
+%% folding over heads -> v2 values, index-keys -> v1 values.
+maybe_accumulate([], Acc, Count, _Filter, _Fun) ->
+    {Acc, Count};
+maybe_accumulate(
+        [{K, {_SQN, {active, TS}, _SH, _MD, undefined}=V}|T],
+        Acc, Count, {Now, _ModRange}=Filter, AccFun)
+        when TS >= Now ->
+    maybe_accumulate(T, AccFun(K, V, Acc), Count + 1, Filter, AccFun);
+maybe_accumulate(
+        [{K, {_SQN, {active, TS}, _SH, _MD}=V}|T],
+        Acc, Count, {Now, _ModRange}=Filter, AccFun)
+        when TS >= Now ->
+    maybe_accumulate(T, AccFun(K, V, Acc), Count + 1, Filter, AccFun);
+maybe_accumulate(
+        [{_K, {_SQN, tomb, _SH, _MD, _LMD}}|T],
+        Acc, Count, Filter, AccFun) ->
+    maybe_accumulate(T, Acc, Count, Filter, AccFun);
+maybe_accumulate(
+        [{_K, {_SQN, tomb, _SH, _MD}}|T],
+        Acc, Count, Filter, AccFun) ->
+    maybe_accumulate(T, Acc, Count, Filter, AccFun);
+maybe_accumulate(
+        [{K, {_SQN, {active, TS}, _SH, _MD, LMD}=V}|T],
+        Acc, Count, {Now, {LowDate, HighDate}}=Filter, AccFun)
+        when TS >= Now, LMD >= LowDate, LMD =< HighDate ->
+    maybe_accumulate(T, AccFun(K, V, Acc), Count + 1, Filter, AccFun);
+maybe_accumulate(
+        [_LV|T],
+        Acc, Count, Filter, AccFun) ->
+    maybe_accumulate(T, Acc, Count, Filter, AccFun).
+
+-spec accumulate_index(
+        {boolean(), undefined|leveled_runner:mp()}, leveled_runner:acc_fun())
+            -> any().
+accumulate_index({false, undefined}, FoldKeysFun) ->
+    fun({?IDX_TAG, Bucket, _IndexInfo, ObjKey}, _Value, Acc) ->
+        FoldKeysFun(Bucket, ObjKey, Acc)
+    end;
+accumulate_index({true, undefined}, FoldKeysFun) ->
+    fun({?IDX_TAG, Bucket, {_IdxFld, IdxValue}, ObjKey}, _Value, Acc) ->
+        FoldKeysFun(Bucket, {IdxValue, ObjKey}, Acc)
+    end;
+accumulate_index({AddTerm, TermRegex}, FoldKeysFun) ->
+    fun({?IDX_TAG, Bucket, {_IdxFld, IdxValue}, ObjKey}, _Value, Acc) ->
+        case re:run(IdxValue, TermRegex) of
+            nomatch ->
+                Acc;
+            _ ->
+                case AddTerm of
+                    true ->
+                        FoldKeysFun(Bucket, {IdxValue, ObjKey}, Acc);
+                    false ->
+                        FoldKeysFun(Bucket, ObjKey, Acc)
+                end
+        end
+    end.
+
+-spec key_dominates(ledger_kv(), ledger_kv()) -> boolean().
 %% @doc
 %% When comparing two keys in the ledger need to find if one key comes before 
 %% the other, or if the match, which key is "better" and should be the winner
-key_dominates({LK, _LVAL}, {RK, _RVAL}) when LK < RK ->
-    left_hand_first;
-key_dominates({LK, _LVAL}, {RK, _RVAL}) when RK < LK ->
-    right_hand_first;
 key_dominates(LObj, RObj) ->
-    case strip_to_seqonly(LObj) >= strip_to_seqonly(RObj) of
-        true ->
-            left_hand_dominant;
-        false ->
-            right_hand_dominant
-    end.
+    strip_to_seqonly(LObj) >= strip_to_seqonly(RObj).
 
 -spec maybe_reap_expiredkey(ledger_kv(), {boolean(), integer()}) -> boolean().
 %% @doc
@@ -286,20 +342,18 @@ maybe_reap(tomb, {true, _CurrTS}) ->
 maybe_reap(_, _) ->
     false.
 
--spec is_active(ledger_key(), ledger_value(), non_neg_integer()) -> boolean().
-%% @doc
-%% Is this an active KV pair or has the timestamp expired
-is_active(Key, Value, Now) ->
-    case strip_to_statusonly({Key, Value}) of
-        {active, infinity} ->
-            true;
-        tomb ->
-            false;
-        {active, TS} when TS >= Now ->
-            true;
-        {active, _TS} ->
-            false
-    end.
+-spec count_tombs(
+        list(ledger_kv()), non_neg_integer()|not_counted) ->
+            non_neg_integer()|not_counted.
+count_tombs(_List, not_counted) ->
+    not_counted;
+count_tombs([], Count) ->
+    Count;
+count_tombs([{_K, V}|T], Count) when element(2, V) == tomb ->
+    count_tombs(T, Count + 1);
+count_tombs([_KV|T], Count) ->
+    count_tombs(T, Count).
+
 
 -spec from_ledgerkey(atom(), tuple()) -> false|tuple().
 %% @doc
@@ -432,7 +486,6 @@ get_tagstrategy(Tag, Strategy) ->
 to_inkerkey(LedgerKey, SQN) ->
     {SQN, ?INKT_STND, LedgerKey}.
 
-
 -spec to_inkerkv(ledger_key(), non_neg_integer(), any(), journal_keychanges(), 
                     compression_method(), boolean()) -> {journal_key(), any()}.
 %% @doc
@@ -467,7 +520,6 @@ from_inkerkv(Object, ToIgnoreKeyChanges) ->
             Object
     end.
 
-
 -spec create_value_for_journal({any(), journal_keychanges()|binary()}, 
                                 boolean(), compression_method()) -> binary().
 %% @doc
@@ -492,14 +544,14 @@ maybe_compress(JournalBin, PressMethod) ->
     <<JBin0:Length0/binary,
         KeyChangeLength:32/integer,
         Type:8/integer>> = JournalBin,
-    {IsBinary, IsCompressed, IsLz4} = decode_valuetype(Type),
+    {IsBinary, IsCompressed, CompMethod} = decode_valuetype(Type),
     case IsCompressed of
         true ->
             JournalBin;
         false ->
             Length1 = Length0 - KeyChangeLength,
             <<OBin2:Length1/binary, KCBin2:KeyChangeLength/binary>> = JBin0,
-            V0 = {deserialise_object(OBin2, IsBinary, IsCompressed, IsLz4),
+            V0 = {deserialise_object(OBin2, IsBinary, IsCompressed, CompMethod),
                     binary_to_term(KCBin2)},
             create_value_for_journal(V0, true, PressMethod)
     end.
@@ -511,6 +563,8 @@ serialise_object(Object, true, Method) when is_binary(Object) ->
         lz4 ->
             {ok, Bin} = lz4:pack(Object),
             Bin;
+        zstd ->
+            zstd:compress(Object);
         native ->
             zlib:compress(Object);
         none ->
@@ -533,35 +587,42 @@ revert_value_from_journal(JournalBin, ToIgnoreKeyChanges) ->
     <<JBin0:Length0/binary,
         KeyChangeLength:32/integer,
         Type:8/integer>> = JournalBin,
-    {IsBinary, IsCompressed, IsLz4} = decode_valuetype(Type),
+    {IsBinary, IsCompressed, CompMethod} = decode_valuetype(Type),
     Length1 = Length0 - KeyChangeLength,
     case ToIgnoreKeyChanges of
         true ->
             <<OBin2:Length1/binary, _KCBin2:KeyChangeLength/binary>> = JBin0,
-            {deserialise_object(OBin2, IsBinary, IsCompressed, IsLz4), 
+            {deserialise_object(OBin2, IsBinary, IsCompressed, CompMethod), 
                 {[], infinity}};
         false ->
             <<OBin2:Length1/binary, KCBin2:KeyChangeLength/binary>> = JBin0,
-            {deserialise_object(OBin2, IsBinary, IsCompressed, IsLz4),
+            {deserialise_object(OBin2, IsBinary, IsCompressed, CompMethod),
                 binary_to_term(KCBin2)}
     end.
 
-deserialise_object(Binary, true, true, true) ->
+deserialise_object(Binary, true, true, lz4) ->
     {ok, Deflated} = lz4:unpack(Binary),
     Deflated;
-deserialise_object(Binary, true, true, false) ->
+deserialise_object(Binary, true, true, zstd) ->
+    zstd:decompress(Binary);
+deserialise_object(Binary, true, true, native) ->
     zlib:uncompress(Binary);
-deserialise_object(Binary, true, false, _IsLz4) ->
+deserialise_object(Binary, true, false, _) ->
     Binary;
-deserialise_object(Binary, false, _, _IsLz4) ->
+deserialise_object(Binary, false, _, _) ->
     binary_to_term(Binary).
 
+-spec encode_valuetype(boolean(), boolean(), native|lz4|zstd|none) -> 0..15.
+%% @doc Note that IsCompressed will be based on the compression_point
+%% configuration option when the object is first stored (i.e. only `true` if
+%% this is set to `on_receipt`).  On compaction this will be set to true.
 encode_valuetype(IsBinary, IsCompressed, Method) ->
-    Bit3 = 
+    {Bit3, Bit4} = 
         case Method of 
-            lz4 -> 4;
-            native -> 0;
-            none -> 0
+            lz4 -> {4, 0};
+            zstd -> {4, 8};
+            native -> {0, 0};
+            none -> {0, 0}
         end,
     Bit2 =
         case IsBinary of            
@@ -573,17 +634,26 @@ encode_valuetype(IsBinary, IsCompressed, Method) ->
             true -> 1;
             false -> 0
         end,
-    Bit1 + Bit2 + Bit3.
+    Bit1 + Bit2 + Bit3 + Bit4.
 
 
--spec decode_valuetype(integer()) -> {boolean(), boolean(), boolean()}.
+-spec decode_valuetype(integer())
+                        -> {boolean(), boolean(), compression_method()}.
 %% @doc
 %% Check bit flags to confirm how the object has been serialised
 decode_valuetype(TypeInt) ->
     IsCompressed = TypeInt band 1 == 1,
     IsBinary = TypeInt band 2 == 2,
-    IsLz4 = TypeInt band 4 == 4,
-    {IsBinary, IsCompressed, IsLz4}.
+    CompressionMethod =
+        case TypeInt band 12 of
+            0 ->
+                native;
+            4 ->
+                lz4;
+            12 ->
+                zstd
+            end,
+    {IsBinary, IsCompressed, CompressionMethod}.
 
 -spec from_journalkey(journal_key()) -> {integer(), ledger_key()}.
 %% @doc
