@@ -3,25 +3,34 @@ name: Erlang CI
 on:
   push:
     branches:
-    - nhse-develop
-    - nhse-develop-3.0
+      - nhse-develop
   pull_request:
     branches:
-    - nhse-develop
-    - nhse-develop-3.0
+      - nhse-develop
 
 jobs:
 
   build:
 
-    runs-on: ubuntu-latest
+    name: Test on ${{ matrix.os }} with OTP ${{ matrix.otp }}
+    runs-on: ${{ matrix.os }}
 
-    container:
-      image: erlang:22.3.3
+    strategy:
+      fail-fast: false
+      matrix:
+        otp: [24]
+        os: [ubuntu-latest]
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Compile
-      run: rebar3 compile
-    - name: Run tests
-      run: rebar3 do xref, dialyzer, eunit
+      - uses: lukka/get-cmake@latest
+      - uses: actions/checkout@v4
+      - name: Install Erlang/OTP
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+      - name: Compile
+        run: ./rebar3 compile
+      - name: Run xref and dialyzer
+        run: ./rebar3 do xref, dialyzer
+      - name: Run eunit
+        run: ./rebar3 as gha do eunit
