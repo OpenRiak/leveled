@@ -2,7 +2,7 @@
 
 ## Introduction
 
-[![Build Status](https://github.com/martinsumner/leveled/actions/workflows/erlang.yml/badge.svg?branch=develop-3.1)](https://github.com/martinsumner/leveled/actions)
+![Leveled OpenRiak Status](https://github.com/OpenRiak/leveled/actions/workflows/erlang.yml/badge.svg?branch=openriak-3.4)
 
 Leveled is a simple Key-Value store based on the concept of Log-Structured Merge Trees, with the following characteristics:
 
