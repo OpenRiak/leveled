@@ -33,6 +33,7 @@
 %%% Non-configurable startup defaults
 %%%============================================================================
 -define(MAX_SSTSLOTS, 256).
+-define(MAX_MERGEBELOW, 24).
 -define(LOADING_PAUSE, 1000).
 -define(LOADING_BATCH, 1000).
 -define(CACHE_SIZE_JITTER, 25).
@@ -70,6 +71,15 @@
     %% Inker key type used for tombstones
 %%%============================================================================
 
+%%%============================================================================
+%%% Helper Function
+%%%============================================================================
+
+-define(IS_DEF(Attribute), Attribute =/= undefined).
+
+-if(?OTP_RELEASE < 26).
+-type dynamic() :: any().
+-endif.
 
 %%%============================================================================
 %%% Shared records
@@ -78,13 +88,6 @@
                         {level :: integer(),
                         is_basement = false :: boolean(),
                         timestamp :: integer()}).                      
-
--record(manifest_entry,
-                        {start_key :: tuple() | undefined,
-                        end_key :: tuple() | undefined,
-                        owner :: pid()|list(),
-                        filename :: string() | undefined,
-                        bloom = none :: leveled_ebloom:bloom() | none}).
 
 -record(cdb_options,
                         {max_size :: pos_integer() | undefined,
@@ -107,7 +110,8 @@
                         press_level = ?COMPRESSION_LEVEL :: non_neg_integer(),
                         log_options = leveled_log:get_opts() 
                             :: leveled_log:log_options(),
-                        max_sstslots = ?MAX_SSTSLOTS :: pos_integer(),
+                        max_sstslots = ?MAX_SSTSLOTS :: pos_integer()|infinity,
+                        max_mergebelow = ?MAX_MERGEBELOW :: pos_integer()|infinity,
                         pagecache_level = ?SST_PAGECACHELEVEL_NOLOOKUP
                             :: pos_integer(),
                         monitor = {no_monitor, 0}
@@ -129,14 +133,15 @@
                         singlefile_compactionperc :: float()|undefined,
                         maxrunlength_compactionperc :: float()|undefined,
                         score_onein = 1 :: pos_integer(),
-                        snaptimeout_long :: pos_integer() | undefined,
+                        snaptimeout_long = 60 :: pos_integer(),
                         monitor = {no_monitor, 0}
                             :: leveled_monitor:monitor()}).
 
 -record(penciller_options,
                         {root_path :: string() | undefined,
                         sst_options = #sst_options{} :: #sst_options{},
-                        max_inmemory_tablesize :: integer() | undefined,
+                        max_inmemory_tablesize  = ?MIN_PCL_CACHE_SIZE
+                            :: pos_integer(),
                         start_snapshot = false :: boolean(),
                         snapshot_query,
                         bookies_pid :: pid() | undefined,
