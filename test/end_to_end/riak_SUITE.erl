@@ -11,6 +11,8 @@
         fetchclocks_modifiedbetween/1,
         crossbucket_aae/1,
         handoff/1,
+        handoff_close/1,
+        handoff_withcompaction/1,
         dollar_bucket_index/1,
         dollar_key_index/1,
         bigobject_memorycheck/1,
@@ -23,6 +25,8 @@ all() -> [
             fetchclocks_modifiedbetween,
             crossbucket_aae,
             handoff,
+            handoff_close,
+            handoff_withcompaction,
             dollar_bucket_index,
             dollar_key_index,
             bigobject_memorycheck,
@@ -1632,6 +1636,149 @@ dollar_key_index(_Config) ->
 
     ok = leveled_bookie:book_close(Bookie1),
     testutil:reset_filestructure().
+
+handoff_close(_Config) ->
+    RootPath = testutil:reset_filestructure(),
+    KeyCount = 500000,
+    Bucket = {<<"BType">>, <<"BName">>},
+    StartOpts1 =
+        [
+            {root_path, RootPath},
+            {max_journalobjectcount, KeyCount + 1},
+            {max_pencillercachesize, 12000},
+            {sync_strategy, testutil:sync_strategy()}
+        ],
+    {ok, Bookie1} = leveled_bookie:book_start(StartOpts1),
+    ObjList1 = 
+        testutil:generate_objects(
+            KeyCount div 10, 
+            {fixed_binary, 1}, [],
+            leveled_rand:rand_bytes(512),
+            fun() -> [] end,
+            Bucket
+        ),
+    ObjList2 = 
+        testutil:generate_objects(
+            KeyCount - (KeyCount div 10), 
+            {fixed_binary, KeyCount div 10 + 1}, [],
+            leveled_rand:rand_bytes(512),
+            fun() -> [] end,
+            Bucket
+        ),
+    testutil:riakload(Bookie1, ObjList1),
+    FoldObjectsFun =
+        fun(_, _, _, Acc) ->
+            [os:timestamp()|Acc]
+        end,
+    {async, Runner} =
+        leveled_bookie:book_objectfold(
+            Bookie1,
+            ?RIAK_TAG,
+            {FoldObjectsFun, []},
+            true,
+            sqn_order
+        ),
+    testutil:riakload(Bookie1, ObjList2),
+    TSList = Runner(),
+    QueryCompletionTime = os:timestamp(),
+    LastTS = hd(TSList),
+    io:format(
+        "Found ~w objects with Last TS ~w completion time ~w~n",
+        [length(TSList), LastTS, QueryCompletionTime]
+    ),
+    true = KeyCount div 10 == length(TSList),
+    TimeSinceLastObjectTouchedMS =
+        timer:now_diff(QueryCompletionTime, LastTS) div 1000,
+    true = TimeSinceLastObjectTouchedMS < 1000,
+    leveled_bookie:book_destroy(Bookie1),
+    testutil:reset_filestructure().
+
+
+handoff_withcompaction(_Config) ->
+    RootPath = testutil:reset_filestructure(),
+    KeyCount = 100000,
+    Bucket = {<<"BType">>, <<"BName">>},
+    StartOpts1 =
+        [
+            {root_path, RootPath},
+            {max_journalobjectcount, KeyCount div 4},
+            {max_pencillercachesize, 12000},
+            {sync_strategy, testutil:sync_strategy()},
+            {max_run_length, 4}
+        ],
+    {ok, Bookie1} = leveled_bookie:book_start(StartOpts1),
+    ObjList1 = 
+        testutil:generate_objects(
+            KeyCount div 4, 
+            {fixed_binary, 1}, [],
+            crypto:strong_rand_bytes(512),
+            fun() -> [] end,
+            Bucket
+        ),
+    testutil:riakload(Bookie1, ObjList1),
+    ObjList2 = 
+        testutil:generate_objects(
+            KeyCount div 4, 
+            {fixed_binary, (KeyCount div 4) + 1}, [],
+            crypto:strong_rand_bytes(512),
+            fun() -> [] end,
+            Bucket
+        ),
+    testutil:riakload(Bookie1, ObjList2),
+    ObjList3 = 
+        testutil:generate_objects(
+            KeyCount div 4, 
+            {fixed_binary, (KeyCount div 4) * 2 + 1}, [],
+            crypto:strong_rand_bytes(512),
+            fun() -> [] end,
+            Bucket
+        ),
+    testutil:riakload(Bookie1, ObjList3),
+    ObjList4 = 
+        testutil:generate_objects(
+            KeyCount div 4, 
+            {fixed_binary, (KeyCount div 4) * 3 + 1}, [],
+            crypto:strong_rand_bytes(512),
+            fun() -> [] end,
+            Bucket
+        ),
+    testutil:riakload(Bookie1, ObjList4),
+    % Now update some objects to prompt compaction
+    testutil:update_some_objects(Bookie1, ObjList1, KeyCount div 8),
+    testutil:update_some_objects(Bookie1, ObjList2, KeyCount div 8),
+    testutil:update_some_objects(Bookie1, ObjList3, KeyCount div 8),
+    testutil:update_some_objects(Bookie1, ObjList4, KeyCount div 8),
+
+    % Setup a handoff-style fold to snapshot journal
+    FoldObjectsFun =
+        fun(_, K, _, Acc) ->
+            [K|Acc]
+        end,
+    {async, Runner} =
+        leveled_bookie:book_objectfold(
+            Bookie1,
+            ?RIAK_TAG,
+            {FoldObjectsFun, []},
+            true,
+            sqn_order
+        ),
+    
+    % Now compact the journal, twice to be sure
+    ok = leveled_bookie:book_compactjournal(Bookie1, 30000),
+    testutil:wait_for_compaction(Bookie1),
+    ok = leveled_bookie:book_compactjournal(Bookie1, 30000),
+    testutil:wait_for_compaction(Bookie1),
+
+    % Run the fold - some cdb files should now be delete_pending
+    {TC0, Results} = timer:tc(Runner),
+    io:format(
+        "Found ~w objects in ~w ms~n",
+        [length(Results), TC0 div 1000]
+    ),
+    true = KeyCount == length(Results),
+    leveled_bookie:book_destroy(Bookie1),
+    testutil:reset_filestructure().
+
 
 %% @doc test that the riak specific $bucket indexes can be iterated
 %% using leveled's existing folders
