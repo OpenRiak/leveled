@@ -22,15 +22,14 @@ jobs:
         os: [ubuntu-latest]
 
     steps:
-      - uses: lukka/get-cmake@latest
-      - uses: actions/checkout@v4
-      - name: Install Erlang/OTP
-        uses: erlef/setup-beam@v1
-        with:
-          otp-version: ${{ matrix.otp }}
-      - name: Compile
-        run: ./rebar3 compile
-      - name: Run xref and dialyzer
-        run: ./rebar3 do xref, dialyzer
-      - name: Run eunit
-        run: ./rebar3 as gha do eunit
+    - uses: actions/checkout@v4
+    - name: Install Erlang/OTP
+      uses: erlef/setup-beam@v1
+      with:
+        otp-version: ${{ matrix.otp }}
+    - name: Compile
+      run: ./rebar3 compile
+    - name: Check format
+      run: ./rebar3 fmt --check
+    - name: Run tests
+      run: ./rebar3 do xref, dialyzer, eunit
