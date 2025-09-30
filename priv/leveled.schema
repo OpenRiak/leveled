@@ -47,7 +47,7 @@
 %% compression) within term_to_binary
 {mapping, "leveled.compression_method", "leveled.compression_method", [
   {datatype, {enum, [native, lz4, zstd, none]}},
-  {default, native}
+  {default, zstd}
 ]}.
 
 %% @doc Ledger compression
