@@ -75,7 +75,8 @@
     book_loglevel/2,
     book_addlogs/2,
     book_removelogs/2,
-    book_headstatus/1
+    book_headstatus/1,
+    book_status/1
 ]).
 
 %% folding API
@@ -1316,6 +1317,24 @@ book_removelogs(Pid, ForcedLogs) ->
 book_headstatus(Pid) ->
     gen_server:call(Pid, head_status, infinity).
 
+-spec book_status(pid()) -> proplists:proplist().
+%% @doc
+%% Return a proplist conteaining the following items:
+%% * current size of the ledger cache;
+%% * number of active journal files;
+%% * average compaction score for the journal;
+%% * current distribution of files across the ledger (e.g. count of files by level);
+%% * current size of the penciller in-memory cache;
+%% * penciller work backlog status;
+%% * last merge time (penciller);
+%% * last compaction time (journal);
+%% * last compaction result (journal) e.g. files compacted and compaction score;
+%% * ratio of metadata to object size (recent PUTs);
+%% * PUT/GET/HEAD recent time/count metrics;
+%% * mean level for recent fetches.
+book_status(Pid) ->
+    gen_server:call(Pid, status, infinity).
+
 %%%============================================================================
 %%% gen_server callbacks
 %%%============================================================================
@@ -1740,6 +1759,8 @@ handle_call(return_actors, _From, State) ->
     {reply, {ok, State#state.inker, State#state.penciller}, State};
 handle_call(head_status, _From, State) ->
     {reply, {State#state.head_only, State#state.head_lookup}, State};
+handle_call(status, _From, State) ->
+    {reply, status(State), State};
 handle_call(Msg, _From, State) ->
     {reply, {unsupported_message, element(1, Msg)}, State}.
 
@@ -3047,6 +3068,23 @@ maybelog_snap_timing({Pid, _StatsFreq}, BookieTime, PCLTime) when
     leveled_monitor:add_stat(Pid, {bookie_snap_update, BookieTime, PCLTime});
 maybelog_snap_timing(_Monitor, _, _) ->
     ok.
+
+
+status(#state{penciller = _Penciller,
+              ledger_cache = _LedgerCache}) ->
+    [{ledger_cache_size, -1},
+     {n_active_journal_files, -1},
+     {avg_compaction_score, -1.0},
+     {level_files_count, []},
+     {penciller_inmem_cache_size, -1},
+     {penciller_work_backlog_status, void},
+     {penciller_last_merge_time, os:system_time(millisecond)},
+     {journal_last_compaction_time, os:system_time(millisecond)},
+     {journal_last_compaction_result, {-1, -1}},
+     {metadata_objsize_ratio, -0.1},
+     {recent_putgethead_counts, []},
+     {recent_fetch_mean_level, -1}].
+
 
 %%%============================================================================
 %%% Test
