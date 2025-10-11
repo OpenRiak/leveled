@@ -3071,8 +3071,10 @@ maybelog_snap_timing(_Monitor, _, _) ->
 
 
 status(#state{penciller = _Penciller,
-              ledger_cache = _LedgerCache}) ->
-    [{ledger_cache_size, -1},
+              ledger_cache = #ledger_cache{mem = Mem}}) ->
+    PP = ets:info(Mem),
+    [{ledger_cache_size, #{size => proplists:get_value(size, PP),
+                           memory => proplists:get_value(memory, PP)}},
      {n_active_journal_files, -1},
      {avg_compaction_score, -1.0},
      {level_files_count, []},
