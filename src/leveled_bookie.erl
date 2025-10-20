@@ -1494,7 +1494,8 @@ handle_call(
             State#state.cache_size,
             State#state.cache_multiple,
             Cache0,
-            State#state.penciller
+            State#state.penciller,
+            State#state.monitor
         )
     of
         {ok, Cache} ->
@@ -1528,7 +1529,8 @@ handle_call({mput, ObjectSpecs, TTL}, From, State) when
             State#state.cache_size,
             State#state.cache_multiple,
             Cache0,
-            State#state.penciller
+            State#state.penciller,
+            State#state.monitor
         )
     of
         {ok, Cache} ->
@@ -1705,7 +1707,8 @@ handle_call({compact_journal, Timeout}, From, State) when
                     State#state.cache_size,
                     State#state.cache_multiple,
                     State#state.ledger_cache,
-                    State#state.penciller
+                    State#state.penciller,
+                    State#state.monitor
                 )
             of
                 {_, NewCache} ->
@@ -2898,7 +2901,7 @@ check_in_ledgercache(PK, Hash, Cache, loader) ->
     end.
 
 -spec maybepush_ledgercache(
-    pos_integer(), pos_integer(), ledger_cache(), pid()
+    pos_integer(), pos_integer(), ledger_cache(), pid(), pid()
 ) ->
     {ok | returned, ledger_cache()}.
 %% @doc
@@ -2911,9 +2914,10 @@ check_in_ledgercache(PK, Hash, Cache, loader) ->
 %% in the reply.  Try again later when it isn't busy (and also potentially
 %% implement a slow_offer state to slow down the pace at which PUTs are being
 %% received)
-maybepush_ledgercache(MaxCacheSize, MaxCacheMult, Cache, Penciller) ->
+maybepush_ledgercache(MaxCacheSize, MaxCacheMult, Cache, Penciller, Monitor) ->
     Tab = Cache#ledger_cache.mem,
     CacheSize = ets:info(Tab, size),
+    leveled_monitor:add_stat(Monitor, {ledger_cache_size_update, CacheSize}),
     TimeToPush = maybe_withjitter(CacheSize, MaxCacheSize, MaxCacheMult),
     if
         TimeToPush ->
@@ -3070,22 +3074,10 @@ maybelog_snap_timing(_Monitor, _, _) ->
     ok.
 
 
-status(#state{penciller = _Penciller,
-              ledger_cache = #ledger_cache{mem = Mem}}) ->
-    PP = ets:info(Mem),
-    [{ledger_cache_size, #{size => proplists:get_value(size, PP),
-                           memory => proplists:get_value(memory, PP)}},
-     {n_active_journal_files, -1},
-     {avg_compaction_score, -1.0},
-     {level_files_count, []},
-     {penciller_inmem_cache_size, -1},
-     {penciller_work_backlog_status, void},
-     {penciller_last_merge_time, os:system_time(millisecond)},
-     {journal_last_compaction_time, os:system_time(millisecond)},
-     {journal_last_compaction_result, {-1, -1}},
-     {metadata_objsize_ratio, -0.1},
-     {recent_putgethead_counts, []},
-     {recent_fetch_mean_level, -1}].
+status(#state{monitor = {no_monitor, 0}}) ->
+    #{};
+status(#state{monitor = {Monitor, _}}) ->
+    leveled_monitor:get_bookie_status(Monitor).
 
 
 %%%============================================================================

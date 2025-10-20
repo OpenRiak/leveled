@@ -38,7 +38,8 @@
     log_level/2,
     log_add/2,
     log_remove/2,
-    get_defaults/0
+    get_defaults/0,
+    get_bookie_status/1
 ]).
 
 -define(LOG_LIST, [
@@ -128,6 +129,21 @@
     sample_start_time = os:timestamp() :: erlang:timestamp()
 }).
 
+-type bookie_status() :: #{
+    ledger_cache_size := undefined | pos_integer(),
+    n_active_journal_files_update := undefined | pos_integer(),
+    avg_compaction_score_update := undefined | pos_integer(),
+    level_files_count_update := undefined | pos_integer(),
+    penciller_inmem_cache_size_update := undefined | pos_integer(),
+    penciller_work_backlog_status_update := undefined | {[non_neg_integer()], boolean(), boolean()},
+    penciller_last_merge_time_update := undefined | pos_integer(),
+    journal_last_compaction_time_update := undefined | pos_integer(),
+    journal_last_compaction_result_update := undefined |  {float(), non_neg_integer()},
+    metadata_objsize_ratio_update := not_implemented,
+    recent_putgethead_counts := undefined | {non_neg_integer(), non_neg_integer(), non_neg_integer()},
+    recent_fetch_mean_level := undefined | [{pos_integer(), non_neg_integer()}]
+}.
+
 -record(state, {
     bookie_get_timings = #bookie_get_timings{} :: bookie_get_timings(),
     bookie_head_timings = #bookie_head_timings{} :: bookie_head_timings(),
@@ -137,7 +153,8 @@
     sst_fetch_timings = [] :: list(sst_fetch_timings()),
     cdb_get_timings = #cdb_get_timings{} :: cdb_get_timings(),
     log_frequency = ?LOG_FREQUENCY_SECONDS :: pos_integer(),
-    log_order = [] :: list(log_type())
+    log_order = [] :: list(log_type()),
+    bookie_status = #{} :: bookie_status()
 }).
 
 -type bookie_get_timings() :: #bookie_get_timings{}.
@@ -179,6 +196,17 @@
         microsecs()}.
 -type cdb_get_update() ::
     {cdb_get_update, pos_integer(), microsecs(), microsecs()}.
+-type bookie_status_update() ::
+    {ledger_cache_size_update, pos_integer()}
+    | {n_active_journal_files_update, pos_integer()}
+    | {avg_compaction_score_update, pos_integer()}
+    | {level_files_count_update, pos_integer()}
+    | {penciller_inmem_cache_size_update, pos_integer()}
+    | {penciller_work_backlog_status_update, {non_neg_integer(), boolean(), boolean()}}
+    | {penciller_last_merge_time_update, pos_integer()}
+    | {journal_last_compaction_time_update, pos_integer()}
+    | {journal_last_compaction_result_update, {float(), non_neg_integer()}}
+    | {metadata_objsize_ratio_update, not_implemented}.
 -type statistic() ::
     bookie_get_update()
     | bookie_head_update()
@@ -186,7 +214,8 @@
     | bookie_snap_update()
     | pcl_fetch_update()
     | sst_fetch_update()
-    | cdb_get_update().
+    | cdb_get_update()
+    | bookie_status_update().
 
 -export_type([monitor/0, timing/0, sst_fetch_type/0, log_type/0]).
 
@@ -227,6 +256,10 @@ log_add(Pid, ForcedLogs) ->
 -spec log_remove(pid(), list(string())) -> ok.
 log_remove(Pid, ForcedLogs) ->
     gen_server:cast(Pid, {log_remove, ForcedLogs}).
+
+-spec get_bookie_status(pid()) -> bookie_status().
+get_bookie_status(Pid) ->
+    gen_server:call(Pid, get_bookie_status).
 
 -spec maybe_time(monitor()) -> erlang:timestamp() | no_timing.
 maybe_time({_Pid, TimingProbability}) ->
@@ -271,6 +304,9 @@ init([LogOpts, LogFrequency, LogOrder]) ->
     InitialJitter = rand:uniform(2 * 1000 * LogFrequency),
     erlang:send_after(InitialJitter, self(), report_next_stats),
     {ok, #state{log_frequency = LogFrequency, log_order = RandomLogOrder}}.
+
+handle_call(get_bookie_status, _From, State = #state{bookie_status = A}) ->
+    {reply, A, State};
 
 handle_call(close, _From, State) ->
     {stop, normal, ok, State}.
