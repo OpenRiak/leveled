@@ -2914,7 +2914,7 @@ check_in_ledgercache(PK, Hash, Cache, loader) ->
 %% in the reply.  Try again later when it isn't busy (and also potentially
 %% implement a slow_offer state to slow down the pace at which PUTs are being
 %% received)
-maybepush_ledgercache(MaxCacheSize, MaxCacheMult, Cache, Penciller, Monitor) ->
+maybepush_ledgercache(MaxCacheSize, MaxCacheMult, Cache, Penciller, {Monitor, _}) ->
     Tab = Cache#ledger_cache.mem,
     CacheSize = ets:info(Tab, size),
     leveled_monitor:add_stat(Monitor, {ledger_cache_size_update, CacheSize}),

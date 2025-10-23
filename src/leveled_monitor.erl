@@ -231,7 +231,9 @@ monitor_start(LogFreq, LogOrder) ->
         ),
     {ok, Monitor}.
 
--spec add_stat(pid(), statistic()) -> ok.
+-spec add_stat(no_monitor | pid(), statistic()) -> ok.
+add_stat(no_monitor, _Statistic) ->
+    ok;
 add_stat(Watcher, Statistic) ->
     gen_server:cast(Watcher, Statistic).
 
@@ -667,7 +669,10 @@ handle_cast({log_add, ForcedLogs}, State) ->
     {noreply, State};
 handle_cast({log_remove, ForcedLogs}, State) ->
     ok = leveled_log:remove_forcedlogs(ForcedLogs),
-    {noreply, State}.
+    {noreply, State};
+handle_cast({ledger_cache_size_update, A}, State = #state{bookie_status = BS}) ->
+    {noreply, State#state{bookie_status = BS#{ledger_cache_size => A}}}.
+
 
 handle_info(report_next_stats, State) ->
     erlang:send_after(
