@@ -793,6 +793,8 @@ handle_call(
                             State#state.levelzero_index,
                             length(State#state.levelzero_cache) + 1
                         ),
+                    {Monitor, _} = State#state.monitor,
+                    leveled_monitor:add_stat(Monitor, {penciller_inmem_cache_size_update, NewL0Size}),
                     leveled_log:log_randomtimer(
                         p0031,
                         [NewL0Size, true, true, MinSQN, MaxSQN],
@@ -1260,7 +1262,7 @@ handle_cast(
     }};
 handle_cast(
     work_for_clerk,
-    State = #state{manifest = Man, levelzero_cache = L0Cache, clerk = Clerk}
+    State = #state{manifest = Man, levelzero_cache = L0Cache, clerk = Clerk, monitor = Monitor}
 ) when
     ?IS_DEF(Man), ?IS_DEF(L0Cache), ?IS_DEF(Clerk)
 ->
@@ -1320,6 +1322,7 @@ handle_cast(
                     % L0 work to do, or because the backlog has grown beyond
                     % tolerance
                     Backlog = WC >= ?WORKQUEUE_BACKLOG_TOLERANCE,
+                    leveled_monitor:add_stat(Monitor, {penciller_work_backlog_status_update, {WC, Backlog, L0Full}}),
                     leveled_log:log(p0024, [WC, Backlog, L0Full]),
                     [TL | _Tail] = WL,
                     ok = leveled_pclerk:clerk_push(Clerk, {TL, Man}),

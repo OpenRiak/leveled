@@ -354,7 +354,7 @@ handle_cast(
     {noreply, State#state{scored_files = [], scoring_state = ScoringState}};
 handle_cast(
     {score_filelist, [Entry | Tail]},
-    State = #state{scoring_state = ScoringState}
+    State = #state{scoring_state = ScoringState, cdb_options = CDBOpts}
 ) when
     ?IS_DEF(ScoringState)
 ->
@@ -379,7 +379,8 @@ handle_cast(
                     ScoringState#scoring_state.max_sqn,
                     ?SAMPLE_SIZE,
                     ?BATCH_SIZE,
-                    State#state.reload_strategy
+                    State#state.reload_strategy,
+                    CDBOpts#cdb_options.monitor
                 );
             {CachedScore, true, _ScoreOneIn} ->
                 % If caches are used roll the score towards the current score
@@ -394,7 +395,8 @@ handle_cast(
                         ScoringState#scoring_state.max_sqn,
                         ?SAMPLE_SIZE,
                         ?BATCH_SIZE,
-                        State#state.reload_strategy
+                        State#state.reload_strategy,
+                        CDBOpts#cdb_options.monitor
                     ),
                 (NewScore + CachedScore) / 2;
             {CachedScore, false, _ScoreOneIn} ->
@@ -427,6 +429,8 @@ handle_cast(
         {MaxRunLength, State#state.maxrunlength_compactionperc,
             State#state.singlefile_compactionperc},
     {BestRun0, Score} = assess_candidates(Candidates, ScoreParams),
+    {Monitor, _} = CDBopts#cdb_options.monitor,
+    leveled_monitor:add_stat(Monitor, {best_compaction_score_update, Score}),
     leveled_log:log_timer(ic003, [Score, length(BestRun0)], SW),
     case Score > 0.0 of
         true ->
@@ -594,7 +598,8 @@ schedule_compaction(CompactionHours, RunsPerDay, CurrentTS) ->
     leveled_codec:sqn(),
     non_neg_integer(),
     non_neg_integer(),
-    leveled_codec:compaction_strategy()
+    leveled_codec:compaction_strategy(),
+    leveled_monitor:monitor()
 ) ->
     float().
 %% @doc
@@ -615,7 +620,8 @@ check_single_file(
     MaxSQN,
     SampleSize,
     BatchSize,
-    ReloadStrategy
+    ReloadStrategy,
+    {Monitor, _}
 ) ->
     FN = leveled_cdb:cdb_filename(CDB),
     SW = os:timestamp(),
@@ -629,6 +635,7 @@ check_single_file(
             MaxSQN,
             ReloadStrategy
         ),
+    leveled_monitor:add_stat(Monitor, {avg_compaction_score_update, Score}),
     safely_log_filescore(PositionList, FN, Score, SW),
     Score.
 
@@ -1265,14 +1272,14 @@ check_single_file_test() ->
                 replaced
         end
     end,
-    Score1 = check_single_file(CDB, LedgerFun1, LedgerSrv1, 9, 8, 4, RS),
+    Score1 = check_single_file(CDB, LedgerFun1, LedgerSrv1, 9, 8, 4, RS, {no_monitor, 0}),
     ?assertMatch(37.5, Score1),
     LedgerFun2 = fun(_Srv, _Key, _ObjSQN) -> current end,
-    Score2 = check_single_file(CDB, LedgerFun2, LedgerSrv1, 9, 8, 4, RS),
+    Score2 = check_single_file(CDB, LedgerFun2, LedgerSrv1, 9, 8, 4, RS, {no_monitor, 0}),
     ?assertMatch(100.0, Score2),
-    Score3 = check_single_file(CDB, LedgerFun1, LedgerSrv1, 9, 8, 3, RS),
+    Score3 = check_single_file(CDB, LedgerFun1, LedgerSrv1, 9, 8, 3, RS, {no_monitor, 0}),
     ?assertMatch(37.5, Score3),
-    Score4 = check_single_file(CDB, LedgerFun1, LedgerSrv1, 4, 8, 4, RS),
+    Score4 = check_single_file(CDB, LedgerFun1, LedgerSrv1, 4, 8, 4, RS, {no_monitor, 0}),
     ?assertMatch(75.0, Score4),
     ok = leveled_cdb:cdb_deletepending(CDB),
     ok = leveled_cdb:cdb_destroy(CDB).
@@ -1417,7 +1424,7 @@ compact_empty_file_test() ->
         {3, {o, "Bucket", "Key3", null}}
     ],
     LedgerFun1 = fun(_Srv, _Key, _ObjSQN) -> replaced end,
-    Score1 = check_single_file(CDB2, LedgerFun1, LedgerSrv1, 9, 8, 4, RS),
+    Score1 = check_single_file(CDB2, LedgerFun1, LedgerSrv1, 9, 8, 4, RS, {no_monitor, 0}),
     ?assert((+0.0 =:= Score1) orelse (-0.0 =:= Score1)),
     ok = leveled_cdb:cdb_deletepending(CDB2),
     ok = leveled_cdb:cdb_destroy(CDB2).

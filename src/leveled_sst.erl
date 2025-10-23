@@ -645,6 +645,12 @@ starting(
             Level
         ),
     Summary = UpdState#state.summary,
+
+    if Level == 0 ->
+            leveled_monitor:add_stat(element(1, Monitor), {penciller_inmem_cache_size_update, 0});
+       el/=se ->
+            noop
+    end,
     leveled_log:log_timer(
         sst08, [ActualFilename, Level, Summary#summary.max_sqn], SW
     ),
@@ -745,6 +751,7 @@ starting(cast, complete_l0startup, State) ->
     Summary = UpdState#state.summary,
     Time4 = timer:now_diff(os:timestamp(), SW4),
 
+    leveled_monitor:add_stat(element(1, Monitor), {penciller_inmem_cache_size_update, 0}),
     leveled_log:log_timer(
         sst08, [ActualFilename, 0, Summary#summary.max_sqn], SW0
     ),

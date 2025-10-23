@@ -493,6 +493,7 @@ starting({call, From}, {open_writer, Filename}, State) ->
     {next_state, writer, State0, [{reply, From, ok}, hibernate]};
 starting({call, From}, {open_reader, Filename}, State) ->
     leveled_log:save(State#state.log_options),
+    leveled_monitor:add_stat(State#state.monitor, {n_active_journal_files_update, +1}),
     leveled_log:log(cdb02, [Filename]),
     {Handle, Index, LastKey} = open_for_readonly(Filename, false),
     State0 = State#state{
@@ -504,6 +505,7 @@ starting({call, From}, {open_reader, Filename}, State) ->
     {next_state, reader, State0, [{reply, From, ok}, hibernate]};
 starting({call, From}, {open_reader, Filename, LastKey}, State) ->
     leveled_log:save(State#state.log_options),
+    leveled_monitor:add_stat(State#state.monitor, {n_active_journal_files_update, +1}),
     leveled_log:log(cdb02, [Filename]),
     {Handle, Index, LastKey} = open_for_readonly(Filename, LastKey),
     State0 = State#state{
@@ -880,6 +882,7 @@ delete_pending(
 ) when
     ?IS_DEF(FN), ?IS_DEF(IO)
 ->
+    leveled_monitor:add_stat(State#state.monitor, {n_active_journal_files_update, -1}),
     leveled_log:log(cdb04, [FN, State#state.delete_point]),
     close_pendingdelete(IO, FN, State#state.waste_path),
     {stop, normal};
@@ -906,6 +909,7 @@ delete_pending(
                 ),
             {keep_state_and_data, [?DELETE_TIMEOUT]};
         false ->
+            leveled_monitor:add_stat(State#state.monitor, {n_active_journal_files_update, -1}),
             leveled_log:log(cdb04, [FN, ManSQN]),
             close_pendingdelete(IO, FN, State#state.waste_path),
             {stop, normal}
