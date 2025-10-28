@@ -1262,7 +1262,10 @@ handle_cast(
     }};
 handle_cast(
     work_for_clerk,
-    State = #state{manifest = Man, levelzero_cache = L0Cache, clerk = Clerk, monitor = Monitor}
+    State = #state{manifest = Man,
+                   levelzero_cache = L0Cache,
+                   clerk = Clerk,
+                   monitor = {Monitor, _}}
 ) when
     ?IS_DEF(Man), ?IS_DEF(L0Cache), ?IS_DEF(Clerk)
 ->

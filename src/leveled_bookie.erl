@@ -2901,7 +2901,7 @@ check_in_ledgercache(PK, Hash, Cache, loader) ->
     end.
 
 -spec maybepush_ledgercache(
-    pos_integer(), pos_integer(), ledger_cache(), pid(), pid()
+    pos_integer(), pos_integer(), ledger_cache(), pid(), leveled_monitor:monitor()
 ) ->
     {ok | returned, ledger_cache()}.
 %% @doc

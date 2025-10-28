@@ -130,19 +130,17 @@
 }).
 
 -type bookie_status() :: #{
-    ledger_cache_size := undefined | pos_integer(),
-    n_active_journal_files := undefined | pos_integer(),
-    avg_compaction_score_sample := undefined | [pos_integer()],
-    best_compaction_score := undefined | pos_integer(),
-    level_files_count := undefined | #{non_neg_integer() := non_neg_integer()},
-    penciller_inmem_cache_size := undefined | pos_integer(),
-    penciller_work_backlog_status := undefined | {non_neg_integer(), boolean(), boolean()},
-    penciller_last_merge_time := undefined | pos_integer(),
-    journal_last_compaction_time := undefined | pos_integer(),
-    journal_last_compaction_result := undefined |  {float(), non_neg_integer()},
-    metadata_objsize_ratio := not_implemented,
-    recent_putgethead_counts := undefined | {non_neg_integer(), non_neg_integer(), non_neg_integer()},
-    recent_fetch_mean_level := undefined | [{pos_integer(), non_neg_integer()}]
+    ledger_cache_size => non_neg_integer(),
+    n_active_journal_files => pos_integer(),
+    avg_compaction_score_sample => [float()],
+    level_files_count => #{non_neg_integer() => non_neg_integer()},
+    penciller_inmem_cache_size => pos_integer(),
+    penciller_work_backlog_status => {non_neg_integer(), boolean(), boolean()},
+    penciller_last_merge_time => integer(),
+    journal_last_compaction_time => integer(),
+    journal_last_compaction_result => {non_neg_integer(), float()},
+    recent_putgethead_counts => {non_neg_integer(), non_neg_integer(), non_neg_integer()},
+    recent_fetch_mean_level => [{pos_integer(), non_neg_integer()}]
 }.
 
 -define(AVG_COMPACTION_SCORE_OVER_MAX, 50).
@@ -202,14 +200,13 @@
 -type bookie_status_update() ::
     {ledger_cache_size_update, pos_integer()}
     | {n_active_journal_files_update, integer()}
-    | {avg_compaction_score_update, [pos_integer()]}
-    | {best_compaction_score_update, pos_integer()}
+    | {avg_compaction_score_update, float()}
     | {level_files_count_update, #{non_neg_integer() => pos_integer()}, TS::non_neg_integer()}
     | {penciller_inmem_cache_size_update, pos_integer()}
     | {penciller_work_backlog_status_update, {non_neg_integer(), boolean(), boolean()}}
     %% | {penciller_last_merge_time_update, pos_integer()}  via level_files_count_update
-    | {journal_last_compaction_time_update, pos_integer()}
-    | {journal_last_compaction_result_update, {float(), non_neg_integer()}}
+    | {journal_last_compaction_time_update, integer()}
+    | {journal_last_compaction_result_update, {non_neg_integer(), float()}}
     | {metadata_objsize_ratio_update, not_implemented}.
 -type statistic() ::
     bookie_get_update()
@@ -237,7 +234,6 @@ monitor_start(LogFreq, LogOrder) ->
 
 -spec add_stat(no_monitor | pid(), statistic()) -> ok.
 add_stat(no_monitor, _Statistic) ->
-    logger:notice("not updating statistic ~p because no_monitor", [_Statistic]),
     ok;
 add_stat(Watcher, Statistic) ->
     gen_server:cast(Watcher, Statistic).
@@ -310,10 +306,10 @@ init([LogOpts, LogFrequency, LogOrder]) ->
         ),
     InitialJitter = rand:uniform(2 * 1000 * LogFrequency),
     erlang:send_after(InitialJitter, self(), report_next_stats),
-    {ok, #state{log_frequency = LogFrequency, log_order = RandomLogOrder}}.
+    {ok, #state{log_frequency = LogFrequency, log_order = RandomLogOrder, bookie_status = #{}}}.
 
-handle_call(get_bookie_status, _From, State = #state{bookie_status = A}) ->
-    {reply, A, State};
+handle_call(get_bookie_status, _From, State) ->
+    {reply, enriched_bookie_status(State), State};
 
 handle_call(close, _From, State) ->
     {stop, normal, ok, State}.
@@ -694,9 +690,6 @@ handle_cast({avg_compaction_score_update, A}, State = #state{bookie_status = BS}
         end,
     {noreply, State#state{bookie_status = BS#{avg_compaction_score_sample => NewSample}}};
 
-handle_cast({best_compaction_score_update, A}, State = #state{bookie_status = BS}) ->
-    {noreply, State#state{bookie_status = BS#{best_compaction_score => A}}};
-
 handle_cast({level_files_count_update, U, TS}, State = #state{bookie_status = BS0}) ->
     A = maps:get(level_files_count, BS0, #{}),
     BS1 = maps:put(level_files_count, maps:merge(A, U), BS0),
@@ -709,10 +702,11 @@ handle_cast({penciller_inmem_cache_size_update, A}, State = #state{bookie_status
 handle_cast({penciller_work_backlog_status_update, A}, State = #state{bookie_status = BS}) ->
     {noreply, State#state{bookie_status = BS#{penciller_work_backlog_status => A}}};
 
+handle_cast({journal_last_compaction_time_update, A}, State = #state{bookie_status = BS}) ->
+    {noreply, State#state{bookie_status = BS#{journal_last_compaction_time => A}}};
+
 handle_cast({journal_last_compaction_result_update, A}, State = #state{bookie_status = BS}) ->
-    {noreply, State#state{bookie_status = BS#{journal_last_compaction_result => A}}};
-handle_cast({metadata_objsize_ratio_update, A}, State = #state{bookie_status = BS}) ->
-    {noreply, State#state{bookie_status = BS#{metadata_objsize_ratio => A}}}.
+    {noreply, State#state{bookie_status = BS#{journal_last_compaction_result => A}}}.
 
 
 
@@ -733,6 +727,21 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+enriched_bookie_status(#state{bookie_status = BS,
+                              bookie_get_timings = GT,
+                              bookie_put_timings = PT,
+                              bookie_head_timings = HT}) ->
+    BS#{get_sample_count => GT#bookie_get_timings.sample_count,
+        get_body_time => GT#bookie_get_timings.body_time,
+        head_sample_count => HT#bookie_head_timings.sample_count,
+        head_rsp_time => HT#bookie_head_timings.rsp_time,
+        put_sample_count => PT#bookie_put_timings.sample_count,
+        put_prep_time => PT#bookie_put_timings.prep_time,
+        put_ink_time => PT#bookie_put_timings.ink_time,
+        put_mem_time => PT#bookie_put_timings.mem_time
+       }.
+
 
 %%%============================================================================
 %%% Test

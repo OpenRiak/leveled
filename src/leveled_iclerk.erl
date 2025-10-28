@@ -430,7 +430,10 @@ handle_cast(
             State#state.singlefile_compactionperc},
     {BestRun0, Score} = assess_candidates(Candidates, ScoreParams),
     {Monitor, _} = CDBopts#cdb_options.monitor,
-    leveled_monitor:add_stat(Monitor, {best_compaction_score_update, Score}),
+    leveled_monitor:add_stat(
+      Monitor, {journal_last_compaction_result_update,
+                {length(BestRun0),
+                 Score}}),
     leveled_log:log_timer(ic003, [Score, length(BestRun0)], SW),
     case Score > 0.0 of
         true ->
