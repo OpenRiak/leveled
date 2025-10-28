@@ -391,7 +391,8 @@ do_merge(
     [], [], SinkLevel, _SinkB, _RP, NewSQN, _MaxSQN, SSTOpts, Additions, _Max
 ) ->
     {Monitor, _} = SSTOpts#sst_options.monitor,
-    leveled_monitor:add_stat(Monitor, {level_files_count_update, #{SinkLevel => length(Additions)}}),
+    leveled_monitor:add_stat(
+      Monitor, {level_files_count_update, #{SinkLevel => length(Additions)}, os:system_time(millisecond)}),
     leveled_log:log(pc011, [NewSQN, SinkLevel, length(Additions), full]),
     {lists:reverse(Additions), [], []};
 do_merge(
@@ -400,7 +401,8 @@ do_merge(
     length(Additions) >= Max
 ->
     {Monitor, _} = SSTOpts#sst_options.monitor,
-    leveled_monitor:add_stat(Monitor, {level_files_count_update, #{SinkLevel => length(Additions)}}),
+    leveled_monitor:add_stat(
+      Monitor, {level_files_count_update, #{SinkLevel => length(Additions)}, os:system_time(millisecond)}),
     leveled_log:log(pc011, [NewSQN, SinkLevel, length(Additions), partial]),
     FNSrc =
         leveled_penciller:sst_filename(

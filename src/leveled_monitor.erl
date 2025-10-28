@@ -204,10 +204,10 @@
     | {n_active_journal_files_update, integer()}
     | {avg_compaction_score_update, [pos_integer()]}
     | {best_compaction_score_update, pos_integer()}
-    | {level_files_count_update, #{non_neg_integer() => pos_integer()}}
+    | {level_files_count_update, #{non_neg_integer() => pos_integer()}, TS::non_neg_integer()}
     | {penciller_inmem_cache_size_update, pos_integer()}
     | {penciller_work_backlog_status_update, {non_neg_integer(), boolean(), boolean()}}
-    | {penciller_last_merge_time_update, pos_integer()}
+    %% | {penciller_last_merge_time_update, pos_integer()}  via level_files_count_update
     | {journal_last_compaction_time_update, pos_integer()}
     | {journal_last_compaction_result_update, {float(), non_neg_integer()}}
     | {metadata_objsize_ratio_update, not_implemented}.
@@ -697,17 +697,18 @@ handle_cast({avg_compaction_score_update, A}, State = #state{bookie_status = BS}
 handle_cast({best_compaction_score_update, A}, State = #state{bookie_status = BS}) ->
     {noreply, State#state{bookie_status = BS#{best_compaction_score => A}}};
 
-handle_cast({level_files_count_update, U}, State = #state{bookie_status = BS0}) ->
+handle_cast({level_files_count_update, U, TS}, State = #state{bookie_status = BS0}) ->
     A = maps:get(level_files_count, BS0, #{}),
-    BS = maps:put(level_files_count, maps:merge(A, U), BS0),
-    {noreply, State#state{bookie_status = BS}};
+    BS1 = maps:put(level_files_count, maps:merge(A, U), BS0),
+    BS2 = maps:put(penciller_last_merge_time, TS, BS1),
+    {noreply, State#state{bookie_status = BS2}};
 
 handle_cast({penciller_inmem_cache_size_update, A}, State = #state{bookie_status = BS}) ->
     {noreply, State#state{bookie_status = BS#{penciller_inmem_cache_size => A}}};
+
 handle_cast({penciller_work_backlog_status_update, A}, State = #state{bookie_status = BS}) ->
     {noreply, State#state{bookie_status = BS#{penciller_work_backlog_status => A}}};
-handle_cast({penciller_last_merge_time_update, A}, State = #state{bookie_status = BS}) ->
-    {noreply, State#state{bookie_status = BS#{penciller_last_merge_time => A}}};
+
 handle_cast({journal_last_compaction_result_update, A}, State = #state{bookie_status = BS}) ->
     {noreply, State#state{bookie_status = BS#{journal_last_compaction_result => A}}};
 handle_cast({metadata_objsize_ratio_update, A}, State = #state{bookie_status = BS}) ->
