@@ -139,7 +139,9 @@
     penciller_last_merge_time => integer(),
     journal_last_compaction_time => integer(),
     journal_last_compaction_result => {non_neg_integer(), float()},
-    recent_putgethead_counts => {non_neg_integer(), non_neg_integer(), non_neg_integer()},
+    recent_putgethead_counts => {
+        non_neg_integer(), non_neg_integer(), non_neg_integer()
+    },
     recent_fetch_mean_level => [{pos_integer(), non_neg_integer()}]
 }.
 
@@ -201,9 +203,12 @@
     {ledger_cache_size_update, pos_integer()}
     | {n_active_journal_files_update, integer()}
     | {avg_compaction_score_update, float()}
-    | {level_files_count_update, #{non_neg_integer() => pos_integer()}, TS::non_neg_integer()}
+    | {level_files_count_update, #{non_neg_integer() => pos_integer()},
+        TS :: non_neg_integer()}
     | {penciller_inmem_cache_size_update, pos_integer()}
-    | {penciller_work_backlog_status_update, {non_neg_integer(), boolean(), boolean()}}
+    | {penciller_work_backlog_status_update, {
+        non_neg_integer(), boolean(), boolean()
+    }}
     %% | {penciller_last_merge_time_update, pos_integer()}  via level_files_count_update
     | {journal_last_compaction_time_update, integer()}
     | {journal_last_compaction_result_update, {non_neg_integer(), float()}}
@@ -306,11 +311,14 @@ init([LogOpts, LogFrequency, LogOrder]) ->
         ),
     InitialJitter = rand:uniform(2 * 1000 * LogFrequency),
     erlang:send_after(InitialJitter, self(), report_next_stats),
-    {ok, #state{log_frequency = LogFrequency, log_order = RandomLogOrder, bookie_status = #{}}}.
+    {ok, #state{
+        log_frequency = LogFrequency,
+        log_order = RandomLogOrder,
+        bookie_status = #{}
+    }}.
 
 handle_call(get_bookie_status, _From, State) ->
     {reply, enriched_bookie_status(State), State};
-
 handle_call(close, _From, State) ->
     {stop, normal, ok, State}.
 
@@ -671,16 +679,17 @@ handle_cast({log_add, ForcedLogs}, State) ->
 handle_cast({log_remove, ForcedLogs}, State) ->
     ok = leveled_log:remove_forcedlogs(ForcedLogs),
     {noreply, State};
-
 handle_cast({ledger_cache_size_update, A}, State = #state{bookie_status = BS}) ->
     {noreply, State#state{bookie_status = BS#{ledger_cache_size => A}}};
-
-handle_cast({n_active_journal_files_update, Delta}, State = #state{bookie_status = BS0}) ->
+handle_cast(
+    {n_active_journal_files_update, Delta}, State = #state{bookie_status = BS0}
+) ->
     A = maps:get(n_active_journal_files, BS0, 0),
     BS = maps:put(n_active_journal_files, A + Delta, BS0),
     {noreply, State#state{bookie_status = BS}};
-
-handle_cast({avg_compaction_score_update, A}, State = #state{bookie_status = BS}) ->
+handle_cast(
+    {avg_compaction_score_update, A}, State = #state{bookie_status = BS}
+) ->
     NewSample =
         case [A | maps:get(avg_compaction_score_sample, BS, [])] of
             L when length(L) > ?AVG_COMPACTION_SCORE_OVER_MAX ->
@@ -688,27 +697,40 @@ handle_cast({avg_compaction_score_update, A}, State = #state{bookie_status = BS}
             L ->
                 L
         end,
-    {noreply, State#state{bookie_status = BS#{avg_compaction_score_sample => NewSample}}};
-
-handle_cast({level_files_count_update, U, TS}, State = #state{bookie_status = BS0}) ->
+    {noreply, State#state{
+        bookie_status = BS#{avg_compaction_score_sample => NewSample}
+    }};
+handle_cast(
+    {level_files_count_update, U, TS}, State = #state{bookie_status = BS0}
+) ->
     A = maps:get(level_files_count, BS0, #{}),
     BS1 = maps:put(level_files_count, maps:merge(A, U), BS0),
     BS2 = maps:put(penciller_last_merge_time, TS, BS1),
     {noreply, State#state{bookie_status = BS2}};
-
-handle_cast({penciller_inmem_cache_size_update, A}, State = #state{bookie_status = BS}) ->
+handle_cast(
+    {penciller_inmem_cache_size_update, A}, State = #state{bookie_status = BS}
+) ->
     {noreply, State#state{bookie_status = BS#{penciller_inmem_cache_size => A}}};
-
-handle_cast({penciller_work_backlog_status_update, A}, State = #state{bookie_status = BS}) ->
-    {noreply, State#state{bookie_status = BS#{penciller_work_backlog_status => A}}};
-
-handle_cast({journal_last_compaction_time_update, A}, State = #state{bookie_status = BS}) ->
-    {noreply, State#state{bookie_status = BS#{journal_last_compaction_time => A}}};
-
-handle_cast({journal_last_compaction_result_update, A}, State = #state{bookie_status = BS}) ->
-    {noreply, State#state{bookie_status = BS#{journal_last_compaction_result => A}}}.
-
-
+handle_cast(
+    {penciller_work_backlog_status_update, A},
+    State = #state{bookie_status = BS}
+) ->
+    {noreply, State#state{
+        bookie_status = BS#{penciller_work_backlog_status => A}
+    }};
+handle_cast(
+    {journal_last_compaction_time_update, A}, State = #state{bookie_status = BS}
+) ->
+    {noreply, State#state{
+        bookie_status = BS#{journal_last_compaction_time => A}
+    }};
+handle_cast(
+    {journal_last_compaction_result_update, A},
+    State = #state{bookie_status = BS}
+) ->
+    {noreply, State#state{
+        bookie_status = BS#{journal_last_compaction_result => A}
+    }}.
 
 handle_info(report_next_stats, State) ->
     erlang:send_after(
@@ -728,11 +750,14 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-enriched_bookie_status(#state{bookie_status = BS,
-                              bookie_get_timings = GT,
-                              bookie_put_timings = PT,
-                              bookie_head_timings = HT}) ->
-    BS#{get_sample_count => GT#bookie_get_timings.sample_count,
+enriched_bookie_status(#state{
+    bookie_status = BS,
+    bookie_get_timings = GT,
+    bookie_put_timings = PT,
+    bookie_head_timings = HT
+}) ->
+    BS#{
+        get_sample_count => GT#bookie_get_timings.sample_count,
         get_body_time => GT#bookie_get_timings.body_time,
         head_sample_count => HT#bookie_head_timings.sample_count,
         head_rsp_time => HT#bookie_head_timings.rsp_time,
@@ -740,8 +765,7 @@ enriched_bookie_status(#state{bookie_status = BS,
         put_prep_time => PT#bookie_put_timings.prep_time,
         put_ink_time => PT#bookie_put_timings.ink_time,
         put_mem_time => PT#bookie_put_timings.mem_time
-       }.
-
+    }.
 
 %%%============================================================================
 %%% Test

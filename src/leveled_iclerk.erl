@@ -431,9 +431,9 @@ handle_cast(
     {BestRun0, Score} = assess_candidates(Candidates, ScoreParams),
     {Monitor, _} = CDBopts#cdb_options.monitor,
     leveled_monitor:add_stat(
-      Monitor, {journal_last_compaction_result_update,
-                {length(BestRun0),
-                 Score}}),
+        Monitor,
+        {journal_last_compaction_result_update, {length(BestRun0), Score}}
+    ),
     leveled_log:log_timer(ic003, [Score, length(BestRun0)], SW),
     case Score > 0.0 of
         true ->
@@ -481,7 +481,10 @@ handle_cast(
         leveled_imanifest:find_persistedentries(PersistedSQN, ManifestAsList),
     CDBopts = State#state.cdb_options,
     {Monitor, _} = CDBopts#cdb_options.monitor,
-    leveled_monitor:add_stat(Monitor, {journal_last_compaction_time_update, os:system_time(millisecond)}),
+    leveled_monitor:add_stat(
+        Monitor,
+        {journal_last_compaction_time_update, os:system_time(millisecond)}
+    ),
     leveled_log:log(ic007, []),
     ok = leveled_inker:ink_clerkcomplete(Ink, [], FilesToDelete),
     {noreply, State};
@@ -1278,14 +1281,22 @@ check_single_file_test() ->
                 replaced
         end
     end,
-    Score1 = check_single_file(CDB, LedgerFun1, LedgerSrv1, 9, 8, 4, RS, {no_monitor, 0}),
+    Score1 = check_single_file(
+        CDB, LedgerFun1, LedgerSrv1, 9, 8, 4, RS, {no_monitor, 0}
+    ),
     ?assertMatch(37.5, Score1),
     LedgerFun2 = fun(_Srv, _Key, _ObjSQN) -> current end,
-    Score2 = check_single_file(CDB, LedgerFun2, LedgerSrv1, 9, 8, 4, RS, {no_monitor, 0}),
+    Score2 = check_single_file(
+        CDB, LedgerFun2, LedgerSrv1, 9, 8, 4, RS, {no_monitor, 0}
+    ),
     ?assertMatch(100.0, Score2),
-    Score3 = check_single_file(CDB, LedgerFun1, LedgerSrv1, 9, 8, 3, RS, {no_monitor, 0}),
+    Score3 = check_single_file(
+        CDB, LedgerFun1, LedgerSrv1, 9, 8, 3, RS, {no_monitor, 0}
+    ),
     ?assertMatch(37.5, Score3),
-    Score4 = check_single_file(CDB, LedgerFun1, LedgerSrv1, 4, 8, 4, RS, {no_monitor, 0}),
+    Score4 = check_single_file(
+        CDB, LedgerFun1, LedgerSrv1, 4, 8, 4, RS, {no_monitor, 0}
+    ),
     ?assertMatch(75.0, Score4),
     ok = leveled_cdb:cdb_deletepending(CDB),
     ok = leveled_cdb:cdb_destroy(CDB).
@@ -1430,7 +1441,9 @@ compact_empty_file_test() ->
         {3, {o, "Bucket", "Key3", null}}
     ],
     LedgerFun1 = fun(_Srv, _Key, _ObjSQN) -> replaced end,
-    Score1 = check_single_file(CDB2, LedgerFun1, LedgerSrv1, 9, 8, 4, RS, {no_monitor, 0}),
+    Score1 = check_single_file(
+        CDB2, LedgerFun1, LedgerSrv1, 9, 8, 4, RS, {no_monitor, 0}
+    ),
     ?assert((+0.0 =:= Score1) orelse (-0.0 =:= Score1)),
     ok = leveled_cdb:cdb_deletepending(CDB2),
     ok = leveled_cdb:cdb_destroy(CDB2).

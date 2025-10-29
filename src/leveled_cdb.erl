@@ -913,7 +913,9 @@ delete_pending(
             {keep_state_and_data, [?DELETE_TIMEOUT]};
         false ->
             {Monitor, _} = State#state.monitor,
-            leveled_monitor:add_stat(Monitor, {n_active_journal_files_update, -1}),
+            leveled_monitor:add_stat(
+                Monitor, {n_active_journal_files_update, -1}
+            ),
             leveled_log:log(cdb04, [FN, ManSQN]),
             close_pendingdelete(IO, FN, State#state.waste_path),
             {stop, normal}

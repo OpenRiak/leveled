@@ -2901,7 +2901,11 @@ check_in_ledgercache(PK, Hash, Cache, loader) ->
     end.
 
 -spec maybepush_ledgercache(
-    pos_integer(), pos_integer(), ledger_cache(), pid(), leveled_monitor:monitor()
+    pos_integer(),
+    pos_integer(),
+    ledger_cache(),
+    pid(),
+    leveled_monitor:monitor()
 ) ->
     {ok | returned, ledger_cache()}.
 %% @doc
@@ -2914,7 +2918,9 @@ check_in_ledgercache(PK, Hash, Cache, loader) ->
 %% in the reply.  Try again later when it isn't busy (and also potentially
 %% implement a slow_offer state to slow down the pace at which PUTs are being
 %% received)
-maybepush_ledgercache(MaxCacheSize, MaxCacheMult, Cache, Penciller, {Monitor, _}) ->
+maybepush_ledgercache(
+    MaxCacheSize, MaxCacheMult, Cache, Penciller, {Monitor, _}
+) ->
     Tab = Cache#ledger_cache.mem,
     CacheSize = ets:info(Tab, size),
     leveled_monitor:add_stat(Monitor, {ledger_cache_size_update, CacheSize}),
@@ -3073,12 +3079,10 @@ maybelog_snap_timing({Pid, _StatsFreq}, BookieTime, PCLTime) when
 maybelog_snap_timing(_Monitor, _, _) ->
     ok.
 
-
 status(#state{monitor = {no_monitor, 0}}) ->
     #{};
 status(#state{monitor = {Monitor, _}}) ->
     leveled_monitor:get_bookie_status(Monitor).
-
 
 %%%============================================================================
 %%% Test
