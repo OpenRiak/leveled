@@ -7,7 +7,7 @@
         kernel,
         stdlib,
         lz4,
-        zstd
+        ezstd
     ]},
     {maintainers, ["Martin Sumner"]},
     {licenses, ["Apache"]},
