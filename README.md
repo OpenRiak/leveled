@@ -2,7 +2,7 @@
 
 ## Introduction
 
-![Leveled OpenRiak Status](https://github.com/OpenRiak/leveled/actions/workflows/erlang.yml/badge.svg?branch=openriak-3.4)
+![Leveled OpenRiak Status](https://github.com/OpenRiak/leveled/actions/workflows/erlang.yml/badge.svg?branch=openriak-4.0)
 
 Leveled is a simple Key-Value store based on the concept of Log-Structured Merge Trees, with the following characteristics:
 
@@ -29,6 +29,7 @@ The store has been developed with a <b>focus on being a potential backend to a R
 An optimised version of Riak KV has been produced in parallel which will exploit the availability of HEAD requests (to access object metadata including version vectors), where a full GET is not required.  This, along with reduced write amplification when compared to leveldb, is expected to offer significant improvement in the volume and predictability of throughput for workloads with larger (> 4KB) object sizes, as well as reduced tail latency.
 
 There may be more general uses of Leveled, with the following caveats:
+
   - Leveled should be extended to define new tags that specify what metadata is to be extracted for the inserted objects (or to override the behaviour for the ?STD_TAG).  Without this, there will be limited scope to take advantage of the relative efficiency of HEAD and FOLD_HEAD requests.
   - If objects are small, the [`head_only` mode](docs/STARTUP_OPTIONS.md#head-only) may be used, which will cease separation of object body from header and use the Key/Metadata store as the only long-term persisted store.  In this mode all of the object is treated as Metadata, and the behaviour is closer to that of the leveldb LSM-tree, although with higher median latency.
 
