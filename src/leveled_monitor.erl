@@ -19,6 +19,8 @@
 
 -behaviour(gen_server).
 
+-include("leveled.hrl").
+
 -export([
     init/1,
     handle_call/3,
@@ -535,7 +537,7 @@ handle_cast({report_stats, bookie_get}, State) ->
             os:timestamp(),
             Timings#bookie_get_timings.sample_start_time
         ) div 1000000,
-    leveled_log:log(
+    ?STD_LOG(
         b0016,
         [
             Timings#bookie_get_timings.sample_count,
@@ -553,7 +555,7 @@ handle_cast({report_stats, bookie_head}, State) ->
             os:timestamp(),
             Timings#bookie_head_timings.sample_start_time
         ) div 1000000,
-    leveled_log:log(
+    ?STD_LOG(
         b0018,
         [
             Timings#bookie_head_timings.sample_count,
@@ -574,7 +576,7 @@ handle_cast({report_stats, bookie_put}, State) ->
             os:timestamp(),
             Timings#bookie_put_timings.sample_start_time
         ) div 1000000,
-    leveled_log:log(
+    ?STD_LOG(
         b0015,
         [
             Timings#bookie_put_timings.sample_count,
@@ -593,7 +595,7 @@ handle_cast({report_stats, bookie_snap}, State) ->
             os:timestamp(),
             Timings#bookie_snap_timings.sample_start_time
         ) div 1000000,
-    leveled_log:log(
+    ?STD_LOG(
         b0017,
         [
             Timings#bookie_snap_timings.sample_count,
@@ -610,7 +612,7 @@ handle_cast({report_stats, pcl_fetch}, State) ->
             os:timestamp(),
             Timings#pcl_fetch_timings.sample_start_time
         ) div 1000000,
-    leveled_log:log(
+    ?STD_LOG(
         p0032,
         [
             Timings#pcl_fetch_timings.sample_count,
@@ -640,7 +642,7 @@ handle_cast({report_stats, sst_fetch}, State) ->
                     os:timestamp(),
                     Timings#sst_fetch_timings.sample_start_time
                 ) div 1000000,
-            leveled_log:log(
+            ?STD_LOG(
                 sst12,
                 [
                     Level,
@@ -666,7 +668,7 @@ handle_cast({report_stats, cdb_get}, State) ->
             os:timestamp(),
             Timings#cdb_get_timings.sample_start_time
         ) div 1000000,
-    leveled_log:log(
+    ?STD_LOG(
         cdb19,
         [
             Timings#cdb_get_timings.sample_count,
