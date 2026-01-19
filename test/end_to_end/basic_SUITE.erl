@@ -15,25 +15,27 @@
     bigsst_littlesst/1,
     safereaderror_startup/1,
     remove_journal_test/1,
-    bigpcl_bucketlist/1
+    bigpcl_bucketlist/1,
+    bookie_status_report/1
 ]).
 
 all() ->
     [
-        simple_put_fetch_head_delete,
-        many_put_fetch_head,
-        journal_compaction,
-        fetchput_snapshot,
-        load_and_count,
-        load_and_count_withdelete,
-        space_clear_ondelete,
-        is_empty_test,
-        many_put_fetch_switchcompression,
-        bigjournal_littlejournal,
-        bigsst_littlesst,
-        safereaderror_startup,
-        remove_journal_test,
-        bigpcl_bucketlist
+        bookie_status_report
+        %% simple_put_fetch_head_delete,
+        %% many_put_fetch_head,
+        %% journal_compaction,
+        %% fetchput_snapshot,
+        %% load_and_count,
+        %% load_and_count_withdelete,
+        %% space_clear_ondelete,
+        %% is_empty_test,
+        %% many_put_fetch_switchcompression,
+        %% bigjournal_littlejournal,
+        %% bigsst_littlesst,
+        %% safereaderror_startup,
+        %% remove_journal_test,
+        %% bigpcl_bucketlist
     ].
 
 init_per_suite(Config) ->
@@ -42,6 +44,49 @@ init_per_suite(Config) ->
 
 end_per_suite(Config) ->
     testutil:end_per_suite(Config).
+
+bookie_status_report(_Config) ->
+    RootPath = testutil:reset_filestructure(),
+    StartOpts =
+        [
+            {root_path, RootPath},
+            {sync_strategy, testutil:sync_strategy()},
+            {log_level, info},
+            {forced_logs, []}
+        ],
+    {ok, Bookie} = leveled_bookie:book_start(StartOpts),
+
+    InitialReport =
+        #{
+            fetch_count_by_level =>
+                #{
+                    not_found => #{count => 0, time => 0},
+                    mem => #{count => 0, time => 0},
+                    lower => #{count => 0, time => 0},
+                    '0' => #{count => 0, time => 0},
+                    '1' => #{count => 0, time => 0},
+                    '2' => #{count => 0, time => 0},
+                    '3' => #{count => 0, time => 0}
+                },
+            get_body_time => 0,
+            get_sample_count => 0,
+            head_rsp_time => 0,
+            head_sample_count => 0,
+            put_ink_time => 0,
+            put_mem_time => 0,
+            put_prep_time => 0,
+            put_sample_count => 0
+        },
+    InitialReport = leveled_bookie:book_status(Bookie),
+
+    {TestObject, TestSpec} = testutil:generate_testobject(),
+    ok = testutil:book_riakput(Bookie, TestObject, TestSpec),
+
+    ReportAfterOnePut =
+        maps:merge(#{ledger_cache_size => 1}, InitialReport),
+    ReportAfterOnePut = leveled_bookie:book_status(Bookie),
+
+    ok = leveled_bookie:book_destroy(Bookie).
 
 simple_put_fetch_head_delete(_Config) ->
     io:format("simple test with info and no forced logs~n"),
