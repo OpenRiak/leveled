@@ -326,8 +326,60 @@ init([LogOpts, LogFrequency, LogOrder]) ->
         bookie_status = #{}
     }}.
 
-handle_call(get_bookie_status, _From, State) ->
-    {reply, enriched_bookie_status(State), State};
+handle_call(
+    get_bookie_status,
+    _From,
+    #state{
+        bookie_status = BS,
+        bookie_get_timings = GT,
+        bookie_put_timings = PT,
+        bookie_head_timings = HT,
+        pcl_fetch_timings = PFT
+    } = State
+) ->
+    FCL = #{
+        not_found => #{
+            count => PFT#pcl_fetch_timings.notfound_count,
+            time => PFT#pcl_fetch_timings.notfound_time
+        },
+        mem => #{
+            count => PFT#pcl_fetch_timings.foundmem_count,
+            time => PFT#pcl_fetch_timings.foundmem_time
+        },
+        '0' => #{
+            count => PFT#pcl_fetch_timings.found0_count,
+            time => PFT#pcl_fetch_timings.found0_time
+        },
+        '1' => #{
+            count => PFT#pcl_fetch_timings.found1_count,
+            time => PFT#pcl_fetch_timings.found1_time
+        },
+        '2' => #{
+            count => PFT#pcl_fetch_timings.found2_count,
+            time => PFT#pcl_fetch_timings.found2_time
+        },
+        '3' => #{
+            count => PFT#pcl_fetch_timings.found3_count,
+            time => PFT#pcl_fetch_timings.found3_time
+        },
+        lower => #{
+            count => PFT#pcl_fetch_timings.foundlower_count,
+            time => PFT#pcl_fetch_timings.foundlower_time
+        }
+    },
+    StatusEnriched =
+        BS#{
+            get_sample_count => GT#bookie_get_timings.sample_count,
+            get_body_time => GT#bookie_get_timings.body_time,
+            head_sample_count => HT#bookie_head_timings.sample_count,
+            head_rsp_time => HT#bookie_head_timings.rsp_time,
+            put_sample_count => PT#bookie_put_timings.sample_count,
+            put_prep_time => PT#bookie_put_timings.prep_time,
+            put_ink_time => PT#bookie_put_timings.ink_time,
+            put_mem_time => PT#bookie_put_timings.mem_time,
+            fetch_count_by_level => FCL
+        },
+    {reply, StatusEnriched, State};
 handle_call(close, _From, State) ->
     {stop, normal, ok, State}.
 
@@ -758,55 +810,6 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-
-enriched_bookie_status(#state{
-    bookie_status = BS,
-    bookie_get_timings = GT,
-    bookie_put_timings = PT,
-    bookie_head_timings = HT,
-    pcl_fetch_timings = PFT
-}) ->
-    FCL = #{
-        not_found => #{
-            count => PFT#pcl_fetch_timings.notfound_count,
-            time => PFT#pcl_fetch_timings.notfound_time
-        },
-        mem => #{
-            count => PFT#pcl_fetch_timings.foundmem_count,
-            time => PFT#pcl_fetch_timings.foundmem_time
-        },
-        '0' => #{
-            count => PFT#pcl_fetch_timings.found0_count,
-            time => PFT#pcl_fetch_timings.found0_time
-        },
-        '1' => #{
-            count => PFT#pcl_fetch_timings.found1_count,
-            time => PFT#pcl_fetch_timings.found1_time
-        },
-        '2' => #{
-            count => PFT#pcl_fetch_timings.found2_count,
-            time => PFT#pcl_fetch_timings.found2_time
-        },
-        '3' => #{
-            count => PFT#pcl_fetch_timings.found3_count,
-            time => PFT#pcl_fetch_timings.found3_time
-        },
-        lower => #{
-            count => PFT#pcl_fetch_timings.foundlower_count,
-            time => PFT#pcl_fetch_timings.foundlower_time
-        }
-    },
-    BS#{
-        get_sample_count => GT#bookie_get_timings.sample_count,
-        get_body_time => GT#bookie_get_timings.body_time,
-        head_sample_count => HT#bookie_head_timings.sample_count,
-        head_rsp_time => HT#bookie_head_timings.rsp_time,
-        put_sample_count => PT#bookie_put_timings.sample_count,
-        put_prep_time => PT#bookie_put_timings.prep_time,
-        put_ink_time => PT#bookie_put_timings.ink_time,
-        put_mem_time => PT#bookie_put_timings.mem_time,
-        fetch_count_by_level => FCL
-    }.
 
 %%%============================================================================
 %%% Test
