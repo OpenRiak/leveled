@@ -132,24 +132,29 @@
 }).
 
 -type bookie_status() :: #{
-    ledger_cache_size => non_neg_integer(),
-    n_active_journal_files => pos_integer(),
-    avg_compaction_score_sample => [float()],
-    level_files_count => #{non_neg_integer() => non_neg_integer()},
-    penciller_inmem_cache_size => pos_integer(),
-    penciller_work_backlog_status => {non_neg_integer(), boolean(), boolean()},
-    penciller_last_merge_time => integer(),
-    journal_last_compaction_time => integer(),
-    journal_last_compaction_result => {non_neg_integer(), float()},
-    recent_putgethead_counts => {
-        non_neg_integer(), non_neg_integer(), non_neg_integer()
-    },
-    fetch_count_by_level => #{
-        reporting_fetch_level() => #{
-            count => non_neg_integer(),
-            time => non_neg_integer()
+    ledger_cache_size => undefined | non_neg_integer(),
+    n_active_journal_files => undefined | pos_integer(),
+    avg_compaction_score_sample => undefined | [float()],
+    level_files_count => undefined | #{non_neg_integer() => non_neg_integer()},
+    penciller_inmem_cache_size => undefined | pos_integer(),
+    penciller_work_backlog_status =>
+        undefined | {non_neg_integer(), boolean(), boolean()},
+    penciller_last_merge_time => undefined | integer(),
+    journal_last_compaction_time => undefined | integer(),
+    journal_last_compaction_result => undefined | {non_neg_integer(), float()},
+    recent_putgethead_counts =>
+        undefined
+        | {
+            non_neg_integer(), non_neg_integer(), non_neg_integer()
+        },
+    fetch_count_by_level =>
+        undefined
+        | #{
+            reporting_fetch_level() => #{
+                count => non_neg_integer(),
+                time => non_neg_integer()
+            }
         }
-    }
 }.
 -type reporting_fetch_level() ::
     not_found | mem | '0' | '1' | '2' | '3' | lower.
@@ -745,14 +750,23 @@ handle_cast({ledger_cache_size_update, A}, State = #state{bookie_status = BS}) -
 handle_cast(
     {n_active_journal_files_update, Delta}, State = #state{bookie_status = BS0}
 ) ->
-    A = maps:get(n_active_journal_files, BS0, 0),
+    A =
+        case maps:get(n_active_journal_files, BS0, undefined) of
+            undefined -> 0;
+            Defined -> Defined
+        end,
     BS = maps:put(n_active_journal_files, A + Delta, BS0),
     {noreply, State#state{bookie_status = BS}};
 handle_cast(
     {avg_compaction_score_update, A}, State = #state{bookie_status = BS}
 ) ->
+    OldSample =
+        case maps:get(avg_compaction_score_sample, BS, undefined) of
+            undefined -> [];
+            Defined -> Defined
+        end,
     NewSample =
-        case [A | maps:get(avg_compaction_score_sample, BS, [])] of
+        case [A | OldSample] of
             L when length(L) > ?AVG_COMPACTION_SCORE_OVER_MAX ->
                 lists:sublist(L, ?AVG_COMPACTION_SCORE_OVER_MAX);
             L ->
@@ -764,7 +778,11 @@ handle_cast(
 handle_cast(
     {level_files_count_update, U, TS}, State = #state{bookie_status = BS0}
 ) ->
-    A = maps:get(level_files_count, BS0, #{}),
+    A =
+        case maps:get(level_files_count, BS0, undefined) of
+            undefined -> #{};
+            Defined -> Defined
+        end,
     BS1 = maps:put(level_files_count, maps:merge(A, U), BS0),
     BS2 = maps:put(penciller_last_merge_time, TS, BS1),
     {noreply, State#state{bookie_status = BS2}};
