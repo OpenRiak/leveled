@@ -1317,9 +1317,9 @@ book_removelogs(Pid, ForcedLogs) ->
 book_headstatus(Pid) ->
     gen_server:call(Pid, head_status, infinity).
 
--spec book_status(pid()) -> proplists:proplist().
+-spec book_status(pid()) -> map().
 %% @doc
-%% Return a proplist conteaining the following items:
+%% Return a proplist containing the following items:
 %% * current size of the ledger cache;
 %% * number of active journal files;
 %% * average compaction score for the journal;
