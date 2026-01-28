@@ -21,21 +21,21 @@
 
 all() ->
     [
-        bookie_status_report
-        %% simple_put_fetch_head_delete,
-        %% many_put_fetch_head,
-        %% journal_compaction,
-        %% fetchput_snapshot,
-        %% load_and_count,
-        %% load_and_count_withdelete,
-        %% space_clear_ondelete,
-        %% is_empty_test,
-        %% many_put_fetch_switchcompression,
-        %% bigjournal_littlejournal,
-        %% bigsst_littlesst,
-        %% safereaderror_startup,
-        %% remove_journal_test,
-        %% bigpcl_bucketlist
+        bookie_status_report,
+        simple_put_fetch_head_delete,
+        many_put_fetch_head,
+        journal_compaction,
+        fetchput_snapshot,
+        load_and_count,
+        load_and_count_withdelete,
+        space_clear_ondelete,
+        is_empty_test,
+        many_put_fetch_switchcompression,
+        bigjournal_littlejournal,
+        bigsst_littlesst,
+        safereaderror_startup,
+        remove_journal_test,
+        bigpcl_bucketlist
     ].
 
 init_per_suite(Config) ->
@@ -52,12 +52,21 @@ bookie_status_report(_Config) ->
             {root_path, RootPath},
             {sync_strategy, testutil:sync_strategy()},
             {log_level, info},
+            {stats_percentage, 100},
             {forced_logs, []}
         ],
     {ok, Bookie} = leveled_bookie:book_start(StartOpts),
 
     InitialReport =
         #{
+            ledger_cache_size => undefined,
+            n_active_journal_files => undefined,
+            level_files_count => undefined,
+            penciller_inmem_cache_size => undefined,
+            penciller_work_backlog_status => undefined,
+            penciller_last_merge_time => undefined,
+            journal_last_compaction_time => undefined,
+            journal_last_compaction_result => undefined,
             fetch_count_by_level =>
                 #{
                     not_found => #{count => 0, time => 0},
@@ -68,25 +77,43 @@ bookie_status_report(_Config) ->
                     '2' => #{count => 0, time => 0},
                     '3' => #{count => 0, time => 0}
                 },
-            get_body_time => 0,
             get_sample_count => 0,
-            head_rsp_time => 0,
+            get_body_time => 0,
             head_sample_count => 0,
+            head_rsp_time => 0,
+            put_sample_count => 0,
+            put_prep_time => 0,
             put_ink_time => 0,
             put_mem_time => 0,
-            put_prep_time => 0,
-            put_sample_count => 0
+            avg_compaction_score => undefined
         },
     InitialReport = leveled_bookie:book_status(Bookie),
 
-    {TestObject, TestSpec} = testutil:generate_testobject(),
-    ok = testutil:book_riakput(Bookie, TestObject, TestSpec),
+    {TObj, TSpec} = testutil:generate_testobject(),
+    ok = testutil:book_riakput(Bookie, TObj, TSpec),
 
-    ReportAfterOnePut =
-        maps:merge(#{ledger_cache_size => 1}, InitialReport),
-    ReportAfterOnePut = leveled_bookie:book_status(Bookie),
+    Rep1 = leveled_bookie:book_status(Bookie),
+    1 = maps:get(ledger_cache_size, Rep1),
+    1 = maps:get(put_sample_count, Rep1),
+    GoodPutPrepTime = 10000,
+    GoodPutInkTime = 10000,
+    GoodPutMemTime = 100,
+    within_range(1, GoodPutPrepTime, maps:get(put_prep_time, Rep1)),
+    within_range(1, GoodPutInkTime, maps:get(put_ink_time, Rep1)),
+    within_range(1, GoodPutMemTime, maps:get(put_mem_time, Rep1)),
+
+    {r_object, TBkt, TKey, _, _, _, _} = TObj,
+    {ok, _} = testutil:book_riakget(Bookie, TBkt, TKey),
+    Rep2 = leveled_bookie:book_status(Bookie),
+    1 = maps:get(get_sample_count, Rep2),
+    GoodGetBodyTime = 500,
+    within_range(1, GoodGetBodyTime, maps:get(get_body_time, Rep2)),
 
     ok = leveled_bookie:book_destroy(Bookie).
+
+within_range(Min, Max, V) ->
+    true = Min =< V,
+    true = Max >= V.
 
 simple_put_fetch_head_delete(_Config) ->
     io:format("simple test with info and no forced logs~n"),
