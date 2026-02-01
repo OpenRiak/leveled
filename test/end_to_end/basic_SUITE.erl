@@ -101,13 +101,79 @@ bookie_status_report(_Config) ->
     within_range(1, GoodPutPrepTime, maps:get(put_prep_time, Rep1)),
     within_range(1, GoodPutInkTime, maps:get(put_ink_time, Rep1)),
     within_range(1, GoodPutMemTime, maps:get(put_mem_time, Rep1)),
+    undefined = maps:get(level_files_count, Rep1),
 
     {r_object, TBkt, TKey, _, _, _, _} = TObj,
     {ok, _} = testutil:book_riakget(Bookie, TBkt, TKey),
     Rep2 = leveled_bookie:book_status(Bookie),
+    io:format(user, "Rep2: ~p\n", [Rep2]),
     1 = maps:get(get_sample_count, Rep2),
     GoodGetBodyTime = 500,
     within_range(1, GoodGetBodyTime, maps:get(get_body_time, Rep2)),
+    undefined = maps:get(level_files_count, Rep2),
+
+    io:format("Prompt journal compaction~n"),
+    CompactionStarted1 = os:system_time(millisecond),
+    ok = leveled_bookie:book_compactjournal(Bookie, 30000),
+    testutil:wait_for_compaction(Bookie),
+
+    Rep3 = leveled_bookie:book_status(Bookie),
+    io:format(user, "Rep3: ~p\n", [Rep3]),
+    {0, +0.0} = maps:get(journal_last_compaction_result, Rep3),
+    within_range(
+        CompactionStarted1,
+        os:system_time(millisecond),
+        maps:get(journal_last_compaction_time, Rep3)
+    ),
+    undefined = maps:get(level_files_count, Rep3),
+    undefined = maps:get(penciller_inmem_cache_size, Rep3),
+    undefined = maps:get(penciller_last_merge_time, Rep3),
+
+    io:format("Load 80K objects and then delete them~n"),
+    testutil:load_objects(
+        20000,
+        [binary_uuid, binary_uuid, binary_uuid, binary_uuid],
+        Bookie,
+        no_check,
+        fun testutil:generate_compressibleobjects/2
+    ),
+    FoldKeysFun = fun(B, K, Acc) -> [{B, K} | Acc] end,
+    {async, F1} =
+        leveled_bookie:book_keylist(Bookie, o_rkv, {FoldKeysFun, []}),
+    KL1 = F1(),
+    lists:foreach(
+        fun({Bucket, Key}) ->
+            testutil:book_riakdelete(Bookie, Bucket, Key, [])
+        end,
+        KL1
+    ),
+
+    io:format("Prompt journal compaction again~n"),
+    CompactionStarted2 = os:system_time(millisecond),
+    ok = leveled_bookie:book_compactjournal(Bookie, 30000),
+    testutil:wait_for_compaction(Bookie),
+
+    Rep4 = leveled_bookie:book_status(Bookie),
+    io:format(user, "Rep4: ~p\n", [Rep4]),
+    #{1 := 1} = maps:get(level_files_count, Rep4),
+    within_range(
+        CompactionStarted2,
+        os:system_time(millisecond),
+        maps:get(journal_last_compaction_time, Rep4)
+    ),
+    %% penciller last merge actually happens before second compaction,
+    %% but only gets recorded in book monitor at the time level files
+    %% count is updated, i.e., earlier than CompactionStarted2, so:
+    within_range(
+        CompactionStarted1,
+        os:system_time(millisecond),
+        maps:get(penciller_last_merge_time, Rep4)
+    ),
+    within_range(
+        0,
+        20000,
+        maps:get(penciller_inmem_cache_size, Rep4)
+    ),
 
     ok = leveled_bookie:book_destroy(Bookie).
 
