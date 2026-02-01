@@ -431,6 +431,10 @@ handle_cast(
         Monitor,
         {journal_last_compaction_result_update, {length(BestRun0), Score}}
     ),
+    leveled_monitor:add_stat(
+        Monitor,
+        {journal_last_compaction_time_update, os:system_time(millisecond)}
+    ),
     ?TMR_LOG(ic003, [Score, length(BestRun0)], SW),
     case Score > 0.0 of
         true ->
@@ -478,10 +482,6 @@ handle_cast(
         leveled_imanifest:find_persistedentries(PersistedSQN, ManifestAsList),
     CDBopts = State#state.cdb_options,
     {Monitor, _} = CDBopts#cdb_options.monitor,
-    leveled_monitor:add_stat(
-        Monitor,
-        {journal_last_compaction_time_update, os:system_time(millisecond)}
-    ),
     ?STD_LOG(ic007, []),
     ok = leveled_inker:ink_clerkcomplete(Ink, [], FilesToDelete),
     {noreply, State};
