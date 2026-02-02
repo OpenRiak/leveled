@@ -729,7 +729,7 @@ fetch_inbatches(PositionList, BatchSize, CDB, CheckedList) ->
 %%
 %% Although this requires many loops over the list of the candidate, as the
 %% file scores have already been calculated the cost per loop should not be
-%% a high burden.  Reducing the maximum run length, will reduce the cost of
+%% a high burden.  Reducing the maximum run length, will reduce the cost if
 %% this exercise should be a problem.
 %%
 %% The score parameters are used to produce the score of the compaction run,
