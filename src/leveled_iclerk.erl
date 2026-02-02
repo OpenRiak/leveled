@@ -481,7 +481,6 @@ handle_cast(
     FilesToDelete =
         leveled_imanifest:find_persistedentries(PersistedSQN, ManifestAsList),
     CDBopts = State#state.cdb_options,
-    {Monitor, _} = CDBopts#cdb_options.monitor,
     ?STD_LOG(ic007, []),
     ok = leveled_inker:ink_clerkcomplete(Ink, [], FilesToDelete),
     {noreply, State};
