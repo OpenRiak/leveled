@@ -52,7 +52,13 @@ bookie_status_report(_Config) ->
             {root_path, RootPath},
             {sync_strategy, testutil:sync_strategy()},
             {log_level, info},
+            %% ensure all stats are always collected
             {stats_percentage, 100},
+            %% to trigger penciller merge events sooner
+            {max_pencillercachesize, 16000},
+            %% to create more journal files (exactly 8 for the 80k of
+            %% keys loaded in the test)
+            {max_journalobjectcount, 10000},
             {forced_logs, []}
         ],
     {ok, Bookie} = leveled_bookie:book_start(StartOpts),
@@ -88,6 +94,7 @@ bookie_status_report(_Config) ->
             avg_compaction_score => undefined
         },
     InitialReport = leveled_bookie:book_status(Bookie),
+    io:format(user, "\nInitial report, before any IO\n~p\n", [InitialReport]),
 
     {TObj, TSpec} = testutil:generate_testobject(),
     ok = testutil:book_riakput(Bookie, TObj, TSpec),
@@ -106,7 +113,7 @@ bookie_status_report(_Config) ->
     {r_object, TBkt, TKey, _, _, _, _} = TObj,
     {ok, _} = testutil:book_riakget(Bookie, TBkt, TKey),
     Rep2 = leveled_bookie:book_status(Bookie),
-    io:format(user, "Rep2: ~p\n", [Rep2]),
+    io:format(user, "\nReport after a single PUT+GET\n~p\n", [Rep2]),
     1 = maps:get(get_sample_count, Rep2),
     GoodGetBodyTime = 500,
     within_range(1, GoodGetBodyTime, maps:get(get_body_time, Rep2)),
@@ -118,7 +125,7 @@ bookie_status_report(_Config) ->
     testutil:wait_for_compaction(Bookie),
 
     Rep3 = leveled_bookie:book_status(Bookie),
-    io:format(user, "Rep3: ~p\n", [Rep3]),
+    io:format(user, "\nReport after first compaction:\n~p\n", [Rep3]),
     {0, +0.0} = maps:get(journal_last_compaction_result, Rep3),
     within_range(
         CompactionStarted1,
@@ -147,33 +154,61 @@ bookie_status_report(_Config) ->
         end,
         KL1
     ),
+    Rep4 = leveled_bookie:book_status(Bookie),
+    io:format(user, "\nReport after loading 80K objects:\n~p\n", [Rep4]),
+    %% we have reduced max penciller cache size to make it certain a
+    %% merge occurs after so many PUTs
+    within_range(
+        CompactionStarted1,
+        os:system_time(millisecond),
+        maps:get(penciller_last_merge_time, Rep4)
+    ),
 
     io:format("Prompt journal compaction again~n"),
     CompactionStarted2 = os:system_time(millisecond),
     ok = leveled_bookie:book_compactjournal(Bookie, 30000),
     testutil:wait_for_compaction(Bookie),
 
-    Rep4 = leveled_bookie:book_status(Bookie),
-    io:format(user, "Rep4: ~p\n", [Rep4]),
-    #{1 := 1} = maps:get(level_files_count, Rep4),
+    Rep5 = leveled_bookie:book_status(Bookie),
+    io:format(user, "\nReport after second compaction:\n~p\n", [Rep5]),
+    #{1 := 1} = maps:get(level_files_count, Rep5),
     within_range(
         CompactionStarted2,
         os:system_time(millisecond),
-        maps:get(journal_last_compaction_time, Rep4)
+        maps:get(journal_last_compaction_time, Rep5)
     ),
-    %% penciller last merge actually happens before second compaction,
-    %% but only gets recorded in book monitor at the time level files
-    %% count is updated, i.e., earlier than CompactionStarted2, so:
-    within_range(
-        CompactionStarted1,
-        os:system_time(millisecond),
-        maps:get(penciller_last_merge_time, Rep4)
-    ),
+    {8, JLCRScore} = maps:get(journal_last_compaction_result, Rep5),
+    within_range(0.0, 100.0, JLCRScore),
+    true = 0 < length(maps:get(avg_compaction_score_sample, Rep5)),
+
     within_range(
         0,
-        20000,
-        maps:get(penciller_inmem_cache_size, Rep4)
+        40000,
+        maps:get(penciller_inmem_cache_size, Rep5)
     ),
+    NAJF = maps:get(n_active_journal_files, Rep5),
+    {ok, FF1a} = file:list_dir(
+        RootPath ++ "/journal/journal_files/post_compact"
+    ),
+    {ok, FF2a} = file:list_dir(RootPath ++ "/journal/journal_files/"),
+    io:format(user, "journal files: ~b, in post_compact: ~b\n", [
+        length(FF1a), length(FF2a)
+    ]),
+    %% 8 is the number of journal files to accommodate 80k of objects
+    %% with max_journalobjectcount = 10000
+    NAJF = 8,
+    NAJF = length(FF1a),
+
+    io:format(user, "sleeping 10s to see 8 files are actually deleted\n", []),
+    timer:sleep(_DELETE_TIMEOUT = 10_000 + 1_000),
+    {ok, FF1b} = file:list_dir(
+        RootPath ++ "/journal/journal_files/post_compact"
+    ),
+    {ok, FF2b} = file:list_dir(RootPath ++ "/journal/journal_files/"),
+    io:format(user, "journal files: ~b, in post_compact: ~b\n", [
+        length(FF1b), length(FF2b)
+    ]),
+    NAJF = length(FF2a) - length(FF2b),
 
     ok = leveled_bookie:book_destroy(Bookie).
 
