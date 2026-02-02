@@ -771,7 +771,7 @@ assess_candidates(AllCandidates, Params) ->
     {list(candidate()), float()}.
 %% @doc
 %% For a given run length, calculate the scores for all consecutive runs of
-%% files, comparing the score with the best run which has beens een so far.
+%% files, comparing the score with the best run which has beens seen so far.
 %% The best is a tuple of the actual run of candidates, along with the score
 %% achieved for that run
 assess_for_runlength(RunLength, AllCandidates, Params, Best) ->
@@ -790,7 +790,7 @@ assess_for_runlength(RunLength, AllCandidates, Params, Best) ->
 -spec score_run(list(candidate()), score_parameters()) -> float().
 %% @doc
 %% Score a run.  Caluclate the avergae score across all the files in the run,
-%% and deduct that from a target score.  Good candidate runs for comapction
+%% and deduct that from a target score.  Good candidate runs for compaction
 %% have larger (positive) scores.  Bad candidate runs for compaction have
 %% negative scores.
 score_run([], _Params) ->
