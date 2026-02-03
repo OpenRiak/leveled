@@ -493,7 +493,6 @@ starting({call, From}, {open_writer, Filename}, State) ->
     {next_state, writer, State0, [{reply, From, ok}, hibernate]};
 starting({call, From}, {open_reader, Filename}, State) ->
     leveled_log:save(State#state.log_options),
-    {Monitor, _} = State#state.monitor,
     ?STD_LOG(cdb02, [Filename]),
     {Handle, Index, LastKey} = open_for_readonly(Filename, false),
     State0 = State#state{
@@ -505,7 +504,6 @@ starting({call, From}, {open_reader, Filename}, State) ->
     {next_state, reader, State0, [{reply, From, ok}, hibernate]};
 starting({call, From}, {open_reader, Filename, LastKey}, State) ->
     leveled_log:save(State#state.log_options),
-    {Monitor, _} = State#state.monitor,
     ?STD_LOG(cdb02, [Filename]),
     {Handle, Index, LastKey} = open_for_readonly(Filename, LastKey),
     State0 = State#state{
