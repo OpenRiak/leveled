@@ -186,35 +186,42 @@ bookie_status_report(_Config) ->
         40000,
         maps:get(penciller_inmem_cache_size, Rep5)
     ),
-    NAJF = maps:get(n_active_journal_files, Rep5),
-    {ok, FF1a} = file:list_dir(
-        RootPath ++ "/journal/journal_files/post_compact"
+    NAJF1 = maps:get(n_active_journal_files, Rep5),
+    {FF1a, FF1b} = list_journal_files(RootPath),
+    io:format(
+        user, "journal files: ~b (reported: ~b), in post_compact: ~b\n", [
+            length(FF1a), NAJF1, length(FF1b)
+        ]
     ),
-    {ok, FF2a} = file:list_dir(RootPath ++ "/journal/journal_files/"),
-    io:format(user, "journal files: ~b, in post_compact: ~b\n", [
-        length(FF1a), length(FF2a)
-    ]),
-    %% 8 is the number of journal files to accommodate 80k of objects
-    %% with max_journalobjectcount = 10000
-    NAJF = 8,
-    NAJF = length(FF1a),
+    NAJF1 = length(FF1a),
 
     io:format(user, "sleeping 10s to see 8 files are actually deleted\n", []),
     timer:sleep(_DELETE_TIMEOUT = 10_000 + 1_000),
-    {ok, FF1b} = file:list_dir(
-        RootPath ++ "/journal/journal_files/post_compact"
+
+    Rep6 = leveled_bookie:book_status(Bookie),
+    NAJF2 = maps:get(n_active_journal_files, Rep6),
+    {FF2a, FF2b} = list_journal_files(RootPath),
+    io:format(
+        user,
+        "after cleaning up, journal files: ~b (reported: ~b), in post_compact: ~b\n",
+        [
+            length(FF2a), NAJF2, length(FF2b)
+        ]
     ),
-    {ok, FF2b} = file:list_dir(RootPath ++ "/journal/journal_files/"),
-    io:format(user, "journal files: ~b, in post_compact: ~b\n", [
-        length(FF1b), length(FF2b)
-    ]),
-    NAJF = length(FF2a) - length(FF2b),
+    NAJF2 = length(FF2a),
 
     ok = leveled_bookie:book_destroy(Bookie).
 
 within_range(Min, Max, V) ->
     true = Min =< V,
     true = Max >= V.
+
+list_journal_files(RootPath) ->
+    FFa = filelib:wildcard(RootPath ++ "/journal/journal_files/*.cdb"),
+    FFb = filelib:wildcard(
+        RootPath ++ "/journal/journal_files/post_compact/*.cdb"
+    ),
+    {FFa, FFb}.
 
 simple_put_fetch_head_delete(_Config) ->
     io:format("simple test with info and no forced logs~n"),
