@@ -3082,30 +3082,7 @@ maybelog_snap_timing(_Monitor, _, _) ->
 status(#state{monitor = {no_monitor, 0}}) ->
     #{};
 status(#state{monitor = {Monitor, _}}) ->
-    AllZeros =
-        #{
-            ledger_cache_size => undefined,
-            n_active_journal_files => undefined,
-            avg_compaction_score => undefined,
-            level_files_count => undefined,
-            penciller_inmem_cache_size => undefined,
-            penciller_work_backlog_status => undefined,
-            penciller_last_merge_time => undefined,
-            journal_last_compaction_time => undefined,
-            journal_last_compaction_result => undefined,
-            get_sample_count => undefined,
-            get_body_time => undefined,
-            head_sample_count => undefined,
-            head_rsp_time => undefined,
-            put_sample_count => undefined,
-            put_prep_time => undefined,
-            put_ink_time => undefined,
-            put_mem_time => undefined,
-            fetch_count_by_level => undefined
-        },
-    maps:merge(
-        AllZeros, leveled_monitor:get_bookie_status(Monitor)
-    ).
+    leveled_monitor:get_bookie_status(Monitor).
 
 %%%============================================================================
 %%% Test
