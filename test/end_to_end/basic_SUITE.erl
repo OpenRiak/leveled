@@ -62,12 +62,11 @@ bookie_status_report(_Config) ->
             {forced_logs, []}
         ],
     {ok, Bookie} = leveled_bookie:book_start(StartOpts),
-    {FF10, FF10} = list_journal_files(RootPath),
 
     InitialReport =
         #{
             ledger_cache_size => undefined,
-            n_active_journal_files => 0,
+            n_active_journal_files => 1,
             level_files_count => #{},
             penciller_inmem_cache_size => undefined,
             penciller_work_backlog_status => undefined,
@@ -97,15 +96,8 @@ bookie_status_report(_Config) ->
             avg_compaction_score_sample => []
         },
     InitialReport = leveled_bookie:book_status(Bookie),
-    {FF0a, FF0b} = list_journal_files(RootPath),
     io:format(user, "\nInitial report, before any IO\n~p\n", [InitialReport]),
-    io:format(
-        user, "journal files: ~b (reported: ~b), in post_compact: ~b\n", [
-            length(FF0a),
-            maps:get(n_active_journal_files, InitialReport),
-            length(FF0b)
-        ]
-    ),
+    check_n_journal_files(RootPath, InitialReport),
 
     {TObj, TSpec} = testutil:generate_testobject(),
     ok = testutil:book_riakput(Bookie, TObj, TSpec),
@@ -120,6 +112,7 @@ bookie_status_report(_Config) ->
     within_range(1, GoodPutInkTime, maps:get(put_ink_time, Rep1)),
     within_range(1, GoodPutMemTime, maps:get(put_mem_time, Rep1)),
     #{} = maps:get(level_files_count, Rep1),
+    check_n_journal_files(RootPath, Rep1),
 
     {r_object, TBkt, TKey, _, _, _, _} = TObj,
     {ok, _} = testutil:book_riakget(Bookie, TBkt, TKey),
@@ -129,6 +122,7 @@ bookie_status_report(_Config) ->
     GoodGetBodyTime = 500,
     within_range(1, GoodGetBodyTime, maps:get(get_body_time, Rep2)),
     #{} = maps:get(level_files_count, Rep2),
+    check_n_journal_files(RootPath, Rep2),
 
     io:format("Prompt journal compaction~n"),
     CompactionStarted1 = os:system_time(millisecond),
@@ -146,6 +140,7 @@ bookie_status_report(_Config) ->
     #{} = maps:get(level_files_count, Rep3),
     undefined = maps:get(penciller_inmem_cache_size, Rep3),
     undefined = maps:get(penciller_last_merge_time, Rep3),
+    check_n_journal_files(RootPath, Rep3),
 
     io:format("Load 80K objects and then delete them~n"),
     testutil:load_objects(
@@ -165,6 +160,7 @@ bookie_status_report(_Config) ->
         end,
         KL1
     ),
+
     Rep4 = leveled_bookie:book_status(Bookie),
     io:format(user, "\nReport after loading 80K objects:\n~p\n", [Rep4]),
     %% we have reduced max penciller cache size to make it certain a
@@ -174,6 +170,7 @@ bookie_status_report(_Config) ->
         os:system_time(millisecond),
         maps:get(penciller_last_merge_time, Rep4)
     ),
+    check_n_journal_files(RootPath, Rep4),
 
     io:format("Prompt journal compaction again~n"),
     CompactionStarted2 = os:system_time(millisecond),
@@ -191,45 +188,24 @@ bookie_status_report(_Config) ->
     {8, JLCRScore} = maps:get(journal_last_compaction_result, Rep5),
     within_range(0.0, 100.0, JLCRScore),
     true = 0 < length(maps:get(avg_compaction_score_sample, Rep5)),
-
     within_range(
         0,
         40000,
         maps:get(penciller_inmem_cache_size, Rep5)
     ),
-    NAJF1 = maps:get(n_active_journal_files, Rep5),
-    {FF1a, FF1b} = list_journal_files(RootPath),
-    io:format(
-        user, "journal files: ~b (reported: ~b), in post_compact: ~b\n", [
-            length(FF1a), NAJF1, length(FF1b)
-        ]
-    ),
-    NAJF1 = length(FF1a),
+    check_n_journal_files(RootPath, Rep5),
 
     io:format(user, "sleeping 10s to see 8 files are actually deleted\n", []),
     timer:sleep(_DELETE_TIMEOUT = 10_000 + 1_000),
 
     Rep6 = leveled_bookie:book_status(Bookie),
-    NAJF2 = maps:get(n_active_journal_files, Rep6),
-    {FF2a, FF2b} = list_journal_files(RootPath),
-    io:format(
-        user,
-        "after cleaning up, journal files: "
-        "~b (reported: ~b), in post_compact: ~b\n",
-        [length(FF2a), NAJF2, length(FF2b)]
-    ),
-    NAJF2 = length(FF2a),
+    check_n_journal_files(RootPath, Rep6),
 
     io:format(user, "\nClosing book and reopening\n", []),
     ok = leveled_bookie:book_close(Bookie),
     {ok, Bookie2} = leveled_bookie:book_start(StartOpts),
     Rep7 = leveled_bookie:book_status(Bookie2),
-    {FF3a, _} = list_journal_files(RootPath),
-    io:format(
-        user,
-        "\nAfter reopening store, ~p files reported, ~b found on disk\n",
-        [maps:get(n_active_journal_files, Rep7), length(FF3a)]
-    ),
+    check_n_journal_files(RootPath, Rep7),
 
     ok = leveled_bookie:book_destroy(Bookie2).
 
@@ -237,12 +213,18 @@ within_range(Min, Max, V) ->
     true = Min =< V,
     true = Max >= V.
 
-list_journal_files(RootPath) ->
-    FFa = filelib:wildcard(RootPath ++ "/journal/journal_files/*.cdb"),
-    FFb = filelib:wildcard(
-        RootPath ++ "/journal/journal_files/post_compact/*.cdb"
+check_n_journal_files(RootPath, Rep) ->
+    A = length(
+        filelib:wildcard(RootPath ++ "/journal/journal_files/*.{cdb,pnd}")
     ),
-    {FFa, FFb}.
+    B = length(
+        filelib:wildcard(
+            RootPath ++ "/journal/journal_files/post_compact/*.{cdb,pnd}"
+        )
+    ),
+    C = maps:get(n_active_journal_files, Rep),
+    io:format(user, "journal files: ~b (reported: ~b)\n", [A + B, C]),
+    C = A + B.
 
 simple_put_fetch_head_delete(_Config) ->
     io:format("simple test with info and no forced logs~n"),

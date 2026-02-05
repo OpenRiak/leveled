@@ -76,7 +76,7 @@
     journal_last_compaction_time => undefined,
     ledger_cache_size => undefined,
     level_files_count => #{},
-    n_active_journal_files => 0,
+    n_active_journal_files => 1,
     penciller_inmem_cache_size => undefined,
     penciller_last_merge_time => undefined,
     penciller_work_backlog_status => undefined,
@@ -165,7 +165,7 @@
 
 -type bookie_status() :: #{
     ledger_cache_size => undefined | non_neg_integer(),
-    n_active_journal_files => non_neg_integer(),
+    n_active_journal_files => pos_integer(),
     avg_compaction_score => undefined | float(),
     avg_compaction_score_sample => [float()],
     level_files_count => #{non_neg_integer() => non_neg_integer()},
