@@ -69,7 +69,7 @@ bookie_status_report(_Config) ->
             n_active_journal_files => 1,
             level_files_count => #{},
             penciller_inmem_cache_size => undefined,
-            penciller_work_backlog_status => undefined,
+            penciller_work_backlog_status => {0, false, false},
             penciller_last_merge_time => undefined,
             journal_last_compaction_time => undefined,
             journal_last_compaction_result => undefined,

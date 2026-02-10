@@ -1290,9 +1290,19 @@ handle_cast(
             {WL, WC} = leveled_pmanifest:check_for_work(Man),
             case {WC, (CacheAlreadyFull or CacheOverSize)} of
                 {0, false} ->
+                    leveled_monitor:add_stat(
+                        Monitor,
+                        {penciller_work_backlog_status_update,
+                            {0, false, false}}
+                    ),
                     % No work required
                     {noreply, State#state{work_backlog = false}};
                 {WC, true} when WC < ?WORKQUEUE_BACKLOG_TOLERANCE ->
+                    leveled_monitor:add_stat(
+                        Monitor,
+                        {penciller_work_backlog_status_update,
+                            {WC, false, true}}
+                    ),
                     % Rolling the memory to create a new Level Zero file
                     % Must not do this if there is a work backlog beyond the
                     % tolerance, as then the backlog may never be addressed.
