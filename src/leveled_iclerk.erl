@@ -351,7 +351,7 @@ handle_cast(
     {noreply, State#state{scored_files = [], scoring_state = ScoringState}};
 handle_cast(
     {score_filelist, [Entry | Tail]},
-    State = #state{scoring_state = ScoringState, cdb_options = CDBOpts}
+    State = #state{scoring_state = ScoringState}
 ) when
     ?IS_DEF(ScoringState)
 ->
@@ -376,8 +376,7 @@ handle_cast(
                     ScoringState#scoring_state.max_sqn,
                     ?SAMPLE_SIZE,
                     ?BATCH_SIZE,
-                    State#state.reload_strategy,
-                    CDBOpts#cdb_options.monitor
+                    State#state.reload_strategy
                 );
             {CachedScore, true, _ScoreOneIn} ->
                 % If caches are used roll the score towards the current score
@@ -392,8 +391,7 @@ handle_cast(
                         ScoringState#scoring_state.max_sqn,
                         ?SAMPLE_SIZE,
                         ?BATCH_SIZE,
-                        State#state.reload_strategy,
-                        CDBOpts#cdb_options.monitor
+                        State#state.reload_strategy
                     ),
                 (NewScore + CachedScore) / 2;
             {CachedScore, false, _ScoreOneIn} ->
@@ -423,55 +421,69 @@ handle_cast(
     CloseFun = ScoringState#scoring_state.close_fun,
     SW = ScoringState#scoring_state.start_time,
     ScoreParams =
-        {MaxRunLength, State#state.maxrunlength_compactionperc,
-            State#state.singlefile_compactionperc},
+        {
+            MaxRunLength,
+            State#state.maxrunlength_compactionperc,
+            State#state.singlefile_compactionperc
+        },
     {BestRun0, Score} = assess_candidates(Candidates, ScoreParams),
-    {Monitor, _} = CDBopts#cdb_options.monitor,
-    leveled_monitor:add_stat(
-        Monitor,
-        {journal_last_compaction_result_update, {length(BestRun0), Score}}
-    ),
-    leveled_monitor:add_stat(
-        Monitor,
-        {journal_last_compaction_time_update, os:system_time(millisecond)}
-    ),
     ?TMR_LOG(ic003, [Score, length(BestRun0)], SW),
-    case Score > 0.0 of
-        true ->
-            BestRun1 = sort_run(BestRun0),
-            print_compaction_run(BestRun1, ScoreParams),
-            ManifestSlice =
-                compact_files(
-                    BestRun1,
-                    CDBopts,
-                    FilterFun,
-                    FilterServer,
-                    MaxSQN,
-                    State#state.reload_strategy,
-                    State#state.compression_method
-                ),
-            FilesToDelete =
-                lists:map(
-                    fun(C) ->
-                        {
-                            C#candidate.low_sqn,
-                            C#candidate.filename,
-                            C#candidate.journal,
-                            undefined
-                        }
-                    end,
-                    BestRun1
-                ),
-            ?STD_LOG(ic002, [length(FilesToDelete)]),
-            ok = CloseFun(FilterServer),
-            ok =
-                leveled_inker:ink_clerkcomplete(
-                    State#state.inker, ManifestSlice, FilesToDelete
-                );
-        false ->
-            ok = CloseFun(FilterServer),
-            ok = leveled_inker:ink_clerkcomplete(State#state.inker, [], [])
-    end,
+    LRL =
+        case Score > 0.0 of
+            true ->
+                BestRun1 = sort_run(BestRun0),
+                print_compaction_run(BestRun1, ScoreParams),
+                ManifestSlice =
+                    compact_files(
+                        BestRun1,
+                        CDBopts,
+                        FilterFun,
+                        FilterServer,
+                        MaxSQN,
+                        State#state.reload_strategy,
+                        State#state.compression_method
+                    ),
+                FilesToDelete =
+                    lists:map(
+                        fun(C) ->
+                            {
+                                C#candidate.low_sqn,
+                                C#candidate.filename,
+                                C#candidate.journal,
+                                undefined
+                            }
+                        end,
+                        BestRun1
+                    ),
+                ?STD_LOG(ic002, [length(FilesToDelete)]),
+                ok = CloseFun(FilterServer),
+                ok =
+                    leveled_inker:ink_clerkcomplete(
+                        State#state.inker, ManifestSlice, FilesToDelete
+                    ),
+                length(BestRun0);
+            false ->
+                ok = CloseFun(FilterServer),
+                ok =
+                    leveled_inker:ink_clerkcomplete(State#state.inker, [], []),
+                0
+        end,
+    {Monitor, _} = CDBopts#cdb_options.monitor,
+    {MaxScore, MeanScore} = calc_run_stats(Candidates),
+    {MegaST, SecST, MicroST} = ScoringState#scoring_state.start_time,
+    StartTimeMilli = (MegaST * 1000000 + SecST) * 1000 + (MicroST div 1000),
+    leveled_monitor:add_stat(
+        Monitor,
+        {
+            journal_compaction,
+            MaxScore,
+            MeanScore,
+            Score,
+            LRL,
+            os:system_time(millisecond) - StartTimeMilli,
+            StartTimeMilli
+        }
+    ),
     {noreply, State#state{scoring_state = undefined}, hibernate};
 handle_cast(
     {trim, PersistedSQN, ManifestAsList}, State = #state{inker = Ink}
@@ -595,6 +607,18 @@ schedule_compaction(CompactionHours, RunsPerDay, CurrentTS) ->
 %%% Internal functions
 %%%============================================================================
 
+-spec calc_run_stats(list(candidate())) -> {float(), float()}.
+calc_run_stats(Candidates) ->
+    case lists:map(fun(C) -> C#candidate.compaction_perc end, Candidates) of
+        L when length(L) > 0 ->
+            {
+                lists:max(L),
+                lists:sum(L) / length(L)
+            };
+        _ ->
+            {0.0, 0.0}
+    end.
+
 -spec check_single_file(
     pid(),
     leveled_inker:filterfun(),
@@ -602,8 +626,7 @@ schedule_compaction(CompactionHours, RunsPerDay, CurrentTS) ->
     leveled_codec:sqn(),
     non_neg_integer(),
     non_neg_integer(),
-    leveled_codec:compaction_strategy(),
-    leveled_monitor:monitor()
+    leveled_codec:compaction_strategy()
 ) ->
     float().
 %% @doc
@@ -624,8 +647,7 @@ check_single_file(
     MaxSQN,
     SampleSize,
     BatchSize,
-    ReloadStrategy,
-    {Monitor, _}
+    ReloadStrategy
 ) ->
     FN = leveled_cdb:cdb_filename(CDB),
     SW = os:timestamp(),
@@ -639,7 +661,6 @@ check_single_file(
             MaxSQN,
             ReloadStrategy
         ),
-    leveled_monitor:add_stat(Monitor, {avg_compaction_score_update, Score}),
     safely_log_filescore(PositionList, FN, Score, SW),
     Score.
 
@@ -1276,22 +1297,17 @@ check_single_file_test() ->
                 replaced
         end
     end,
-    Score1 = check_single_file(
-        CDB, LedgerFun1, LedgerSrv1, 9, 8, 4, RS, {no_monitor, 0}
-    ),
+    Score1 = check_single_file(CDB, LedgerFun1, LedgerSrv1, 9, 8, 4, RS),
     ?assertMatch(37.5, Score1),
     LedgerFun2 = fun(_Srv, _Key, _ObjSQN) -> current end,
-    Score2 = check_single_file(
-        CDB, LedgerFun2, LedgerSrv1, 9, 8, 4, RS, {no_monitor, 0}
-    ),
+    Score2 =
+        check_single_file(
+            CDB, LedgerFun2, LedgerSrv1, 9, 8, 4, RS
+        ),
     ?assertMatch(100.0, Score2),
-    Score3 = check_single_file(
-        CDB, LedgerFun1, LedgerSrv1, 9, 8, 3, RS, {no_monitor, 0}
-    ),
+    Score3 = check_single_file(CDB, LedgerFun1, LedgerSrv1, 9, 8, 3, RS),
     ?assertMatch(37.5, Score3),
-    Score4 = check_single_file(
-        CDB, LedgerFun1, LedgerSrv1, 4, 8, 4, RS, {no_monitor, 0}
-    ),
+    Score4 = check_single_file(CDB, LedgerFun1, LedgerSrv1, 4, 8, 4, RS),
     ?assertMatch(75.0, Score4),
     ok = leveled_cdb:cdb_deletepending(CDB),
     ok = leveled_cdb:cdb_destroy(CDB).
@@ -1436,9 +1452,8 @@ compact_empty_file_test() ->
         {3, {o, "Bucket", "Key3", null}}
     ],
     LedgerFun1 = fun(_Srv, _Key, _ObjSQN) -> replaced end,
-    Score1 = check_single_file(
-        CDB2, LedgerFun1, LedgerSrv1, 9, 8, 4, RS, {no_monitor, 0}
-    ),
+    Score1 =
+        check_single_file(CDB2, LedgerFun1, LedgerSrv1, 9, 8, 4, RS),
     ?assert((+0.0 =:= Score1) orelse (-0.0 =:= Score1)),
     ok = leveled_cdb:cdb_deletepending(CDB2),
     ok = leveled_cdb:cdb_destroy(CDB2).

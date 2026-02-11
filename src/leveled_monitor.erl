@@ -70,12 +70,14 @@
     get_sample_count => 0,
     head_rsp_time => 0,
     head_sample_count => 0,
-    journal_last_compaction_result => undefined,
     journal_last_compaction_time => undefined,
+    journal_last_compaction_duration => undefined,
+    journal_last_compaction_score => undefined,
+    journal_last_compaction_max => undefined,
+    journal_last_compaction_mean => undefined,
+    journal_last_compaction_runlength => undefined,
     ledger_cache_size => undefined,
     level_files_count => #{},
-    avg_compaction_score => undefined,
-    max_compaction_score => undefined,
     n_active_journal_files => 1,
     penciller_inmem_cache_size => undefined,
     penciller_last_merge_time => undefined,
@@ -83,8 +85,7 @@
     put_ink_time => 0,
     put_mem_time => 0,
     put_prep_time => 0,
-    put_sample_count => 0,
-    tmp_compaction_score_sample => []
+    put_sample_count => 0
 }).
 
 -record(bookie_get_timings, {
@@ -99,7 +100,6 @@
     sample_count = 0 :: non_neg_integer(),
     cache_count = 0 :: non_neg_integer(),
     found_count = 0 :: non_neg_integer(),
-    cache_hits = 0 :: non_neg_integer(),
     fetch_ledger_time = 0 :: non_neg_integer(),
     fetch_ledgercache_time = 0 :: non_neg_integer(),
     rsp_time = 0 :: non_neg_integer(),
@@ -166,18 +166,17 @@
 -type bookie_status() :: #{
     ledger_cache_size => undefined | non_neg_integer(),
     n_active_journal_files => pos_integer(),
-    avg_compaction_score => undefined | float(),
-    max_compaction_score => undefined | float(),
-    tmp_compaction_score_sample => [float()],
-    %% this sample is a tmp buffer, only used to produce min_ and max_
-    %% items above; will be dropped from final bookie_status
     level_files_count => #{non_neg_integer() => non_neg_integer()},
     penciller_inmem_cache_size => undefined | pos_integer(),
     penciller_work_backlog_status =>
         undefined | {non_neg_integer(), boolean(), boolean()},
     penciller_last_merge_time => undefined | integer(),
-    journal_last_compaction_time => undefined | integer(),
-    journal_last_compaction_result => undefined | {non_neg_integer(), float()},
+    journal_last_compaction_time => undefined | pos_integer(),
+    journal_last_compaction_duration => undefined | non_neg_integer(),
+    journal_last_compaction_score => undefined | float(),
+    journal_last_compaction_max => undefined | float(),
+    journal_last_compaction_mean => undefined | float(),
+    journal_last_compaction_runlength => undefined | non_neg_integer(),
     fetch_count_by_level =>
         undefined
         | #{
@@ -197,8 +196,6 @@
 }.
 -type reporting_fetch_level() ::
     not_found | mem | '0' | '1' | '2' | '3' | lower.
-
--define(AVG_COMPACTION_SCORE_OVER_MAX, 50).
 
 -record(state, {
     bookie_get_timings = #bookie_get_timings{} :: bookie_get_timings(),
@@ -262,9 +259,15 @@
     | {penciller_work_backlog_status_update, {
         non_neg_integer(), boolean(), boolean()
     }}
-    %% | {penciller_last_merge_time_update, pos_integer()}  via level_files_count_update
-    | {journal_last_compaction_time_update, integer()}
-    | {journal_last_compaction_result_update, {non_neg_integer(), float()}}
+    | {
+        journal_compaction,
+        float(),
+        float(),
+        float(),
+        pos_integer(),
+        non_neg_integer(),
+        pos_integer()
+    }
     | {metadata_objsize_ratio_update, not_implemented}.
 -type statistic() ::
     bookie_get_update()
@@ -423,9 +426,7 @@ handle_call(
             put_mem_time => PT#bookie_put_timings.mem_time,
             fetch_count_by_level => FCL
         },
-    StatusTrimmed =
-        maps:remove(tmp_compaction_score_sample, StatusEnriched),
-    {reply, StatusTrimmed, State};
+    {reply, StatusEnriched, State};
 handle_call(close, _From, State) ->
     {stop, normal, ok, State}.
 
@@ -795,32 +796,9 @@ handle_cast(
     BS = maps:put(n_active_journal_files, A + Delta, BS0),
     {noreply, State#state{bookie_status = BS}};
 handle_cast(
-    {avg_compaction_score_update, A}, State = #state{bookie_status = BS}
-) ->
-    OldSample = maps:get(tmp_compaction_score_sample, BS),
-    NewSample =
-        case [A | OldSample] of
-            L when length(L) > ?AVG_COMPACTION_SCORE_OVER_MAX ->
-                lists:sublist(L, ?AVG_COMPACTION_SCORE_OVER_MAX);
-            L ->
-                L
-        end,
-    {Avg, Max} =
-        case length(NewSample) of
-            0 -> {undefined, undefined};
-            Length -> {lists:sum(NewSample) / Length, lists:max(NewSample)}
-        end,
-    {noreply, State#state{
-        bookie_status = BS#{
-            tmp_compaction_score_sample => NewSample,
-            avg_compaction_score => Avg,
-            max_compaction_score => Max
-        }
-    }};
-handle_cast(
     {level_files_count_update, U, TS}, State = #state{bookie_status = BS0}
 ) ->
-    A = maps:get(level_files_count, BS0, undefined),
+    A = maps:get(level_files_count, BS0),
     BS1 = maps:put(level_files_count, maps:merge(A, U), BS0),
     BS2 = maps:put(penciller_last_merge_time, TS, BS1),
     {noreply, State#state{bookie_status = BS2}};
@@ -836,18 +814,23 @@ handle_cast(
         bookie_status = BS#{penciller_work_backlog_status => A}
     }};
 handle_cast(
-    {journal_last_compaction_time_update, A}, State = #state{bookie_status = BS}
-) ->
-    {noreply, State#state{
-        bookie_status = BS#{journal_last_compaction_time => A}
-    }};
-handle_cast(
-    {journal_last_compaction_result_update, A},
+    {journal_compaction, MaxScore, MeanScore, Score, LRL, Duration, StartTime},
     State = #state{bookie_status = BS}
 ) ->
-    {noreply, State#state{
-        bookie_status = BS#{journal_last_compaction_result => A}
-    }}.
+    {
+        noreply,
+        State#state{
+            bookie_status =
+                BS#{
+                    journal_last_compaction_time => StartTime,
+                    journal_last_compaction_duration => Duration,
+                    journal_last_compaction_score => Score,
+                    journal_last_compaction_max => MaxScore,
+                    journal_last_compaction_mean => MeanScore,
+                    journal_last_compaction_runlength => LRL
+                }
+        }
+    }.
 
 handle_info(report_next_stats, State) ->
     erlang:send_after(
@@ -878,7 +861,12 @@ code_change(_OldVsn, State, _Extra) ->
 coverage_cheat_test() ->
     {ok, M} = monitor_start(1, []),
     timer:sleep(2000),
-    {ok, _State1} = code_change(null, #state{}, null),
+    {ok, _State1} =
+        code_change(
+            null,
+            #state{bookie_status = ?INITIAL_BOOKIE_STATUS},
+            null
+        ),
     ok = add_stat(M, {pcl_fetch_update, 4, 100}),
     ok = report_stats(M, pcl_fetch),
     % Can close, so empty log_order hasn't crashed
