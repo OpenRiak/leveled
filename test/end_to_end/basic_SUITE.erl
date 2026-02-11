@@ -83,7 +83,6 @@ bookie_status_report(_Config) ->
                     '2' => #{count => 0, time => 0},
                     '3' => #{count => 0, time => 0}
                 },
-            recent_putgethead_counts => undefined,
             get_sample_count => 0,
             get_body_time => 0,
             head_sample_count => 0,

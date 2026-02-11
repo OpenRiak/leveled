@@ -83,8 +83,7 @@
     put_ink_time => 0,
     put_mem_time => 0,
     put_prep_time => 0,
-    put_sample_count => 0,
-    recent_putgethead_counts => undefined
+    put_sample_count => 0
 }).
 
 -record(bookie_get_timings, {
@@ -175,11 +174,6 @@
     penciller_last_merge_time => undefined | integer(),
     journal_last_compaction_time => undefined | integer(),
     journal_last_compaction_result => undefined | {non_neg_integer(), float()},
-    recent_putgethead_counts =>
-        undefined
-        | {
-            non_neg_integer(), non_neg_integer(), non_neg_integer()
-        },
     fetch_count_by_level =>
         undefined
         | #{
