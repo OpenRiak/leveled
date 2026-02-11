@@ -56,8 +56,6 @@
 -define(LOG_FREQUENCY_SECONDS, 30).
 
 -define(INITIAL_BOOKIE_STATUS, #{
-    avg_compaction_score => undefined,
-    avg_compaction_score_sample => [],
     fetch_count_by_level =>
         #{
             not_found => #{count => 0, time => 0},
@@ -76,6 +74,8 @@
     journal_last_compaction_time => undefined,
     ledger_cache_size => undefined,
     level_files_count => #{},
+    min_compaction_score => undefined,
+    max_compaction_score => undefined,
     n_active_journal_files => 1,
     penciller_inmem_cache_size => undefined,
     penciller_last_merge_time => undefined,
@@ -83,7 +83,8 @@
     put_ink_time => 0,
     put_mem_time => 0,
     put_prep_time => 0,
-    put_sample_count => 0
+    put_sample_count => 0,
+    tmp_compaction_score_sample => []
 }).
 
 -record(bookie_get_timings, {
@@ -165,8 +166,11 @@
 -type bookie_status() :: #{
     ledger_cache_size => undefined | non_neg_integer(),
     n_active_journal_files => pos_integer(),
-    avg_compaction_score => undefined | float(),
-    avg_compaction_score_sample => [float()],
+    min_compaction_score => undefined | float(),
+    max_compaction_score => undefined | float(),
+    tmp_compaction_score_sample => [float()],
+    %% this sample is a tmp buffer, only used to produce min_ and max_
+    %% items above; will be dropped from final bookie_status
     level_files_count => #{non_neg_integer() => non_neg_integer()},
     penciller_inmem_cache_size => undefined | pos_integer(),
     penciller_work_backlog_status =>
@@ -419,7 +423,9 @@ handle_call(
             put_mem_time => PT#bookie_put_timings.mem_time,
             fetch_count_by_level => FCL
         },
-    {reply, StatusEnriched, State};
+    StatusTrimmed =
+        maps:remove(tmp_compaction_score_sample, StatusEnriched),
+    {reply, StatusTrimmed, State};
 handle_call(close, _From, State) ->
     {stop, normal, ok, State}.
 
@@ -791,7 +797,7 @@ handle_cast(
 handle_cast(
     {avg_compaction_score_update, A}, State = #state{bookie_status = BS}
 ) ->
-    OldSample = maps:get(avg_compaction_score_sample, BS),
+    OldSample = maps:get(tmp_compaction_score_sample, BS),
     NewSample =
         case [A | OldSample] of
             L when length(L) > ?AVG_COMPACTION_SCORE_OVER_MAX ->
@@ -800,7 +806,11 @@ handle_cast(
                 L
         end,
     {noreply, State#state{
-        bookie_status = BS#{avg_compaction_score_sample => NewSample}
+        bookie_status = BS#{
+            tmp_compaction_score_sample => NewSample,
+            min_compaction_score => lists:min(NewSample),
+            max_compaction_score => lists:max(NewSample)
+        }
     }};
 handle_cast(
     {level_files_count_update, U, TS}, State = #state{bookie_status = BS0}

@@ -91,8 +91,8 @@ bookie_status_report(_Config) ->
             put_prep_time => 0,
             put_ink_time => 0,
             put_mem_time => 0,
-            avg_compaction_score => undefined,
-            avg_compaction_score_sample => []
+            min_compaction_score => undefined,
+            max_compaction_score => undefined
         },
     InitialReport = leveled_bookie:book_status(Bookie),
     io:format(user, "\nInitial report, before any IO\n~p\n", [InitialReport]),
@@ -186,7 +186,8 @@ bookie_status_report(_Config) ->
     ),
     {8, JLCRScore} = maps:get(journal_last_compaction_result, Rep5),
     within_range(0.0, 100.0, JLCRScore),
-    true = 0 < length(maps:get(avg_compaction_score_sample, Rep5)),
+    true = +0.0 =< maps:get(min_compaction_score, Rep5),
+    true = 100.0 >= maps:get(max_compaction_score, Rep5),
     within_range(
         0,
         40000,
