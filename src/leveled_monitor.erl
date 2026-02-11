@@ -74,7 +74,7 @@
     journal_last_compaction_time => undefined,
     ledger_cache_size => undefined,
     level_files_count => #{},
-    min_compaction_score => undefined,
+    avg_compaction_score => undefined,
     max_compaction_score => undefined,
     n_active_journal_files => 1,
     penciller_inmem_cache_size => undefined,
@@ -166,7 +166,7 @@
 -type bookie_status() :: #{
     ledger_cache_size => undefined | non_neg_integer(),
     n_active_journal_files => pos_integer(),
-    min_compaction_score => undefined | float(),
+    avg_compaction_score => undefined | float(),
     max_compaction_score => undefined | float(),
     tmp_compaction_score_sample => [float()],
     %% this sample is a tmp buffer, only used to produce min_ and max_
@@ -805,11 +805,16 @@ handle_cast(
             L ->
                 L
         end,
+    {Avg, Max} =
+        case length(NewSample) of
+            0 -> {undefined, undefined};
+            Length -> {lists:sum(NewSample) / Length, lists:max(NewSample)}
+        end,
     {noreply, State#state{
         bookie_status = BS#{
             tmp_compaction_score_sample => NewSample,
-            min_compaction_score => lists:min(NewSample),
-            max_compaction_score => lists:max(NewSample)
+            avg_compaction_score => Avg,
+            max_compaction_score => Max
         }
     }};
 handle_cast(
