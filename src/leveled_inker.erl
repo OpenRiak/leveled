@@ -137,6 +137,9 @@
 -define(WASTE_FP, "waste").
 -define(JOURNAL_FILEX, "cdb").
 -define(PENDING_FILEX, "pnd").
+-define(ARCHIVE_FILEX, "bak").
+% Note that archive means "no longer active", it is an indication of
+% removable waste not of backup.
 -define(TEST_KC, {[], infinity}).
 -define(SHUTDOWN_LOOPS, 10).
 -define(SHUTDOWN_PAUSE, 10000).
@@ -682,7 +685,7 @@ handle_call(roll, _From, State = #state{is_snapshot = Snap}) when
             }}
     end;
 handle_call(
-    {backup, BackupPath}, _from, State
+    {backup, BackupPath}, _From, State
 ) when
     State#state.is_snapshot == true
 ->
@@ -699,20 +702,21 @@ handle_call(
                     ExtendedBaseFN = BaseFN ++ "." ++ ?JOURNAL_FILEX,
                     BackupName = filename:join(BackupJFP, BaseFN),
                     true = leveled_cdb:finished_rolling(PidR),
-                    case
+                    Link =
                         file:make_link(
                             FN ++ "." ++ ?JOURNAL_FILEX,
                             BackupName ++ "." ++ ?JOURNAL_FILEX
-                        )
-                    of
+                        ),
+                    case Link of
                         ok ->
                             ok;
                         {error, eexist} ->
                             ok
                     end,
-                    {[{SQN, BackupName, PidR, LastKey} | ManAcc], [
-                        ExtendedBaseFN | FTRAcc
-                    ]};
+                    {
+                        [{SQN, BackupName, PidR, LastKey} | ManAcc],
+                        [ExtendedBaseFN | FTRAcc]
+                    };
                 false ->
                     ?STD_LOG(i0021, [FN, SQN, State#state.journal_sqn]),
                     {ManAcc, FTRAcc}
@@ -1263,7 +1267,7 @@ close_allmanifest([H | ManifestT]) ->
 ) ->
     leveled_imanifest:manifest().
 %% @doc
-%% Open all the files in the manifets, and updating the manifest with the PIDs
+%% Open all the files in the manifest, and updating the manifest with the PIDs
 %% of the opened files
 open_all_manifest([], RootPath, CDBOpts) ->
     ?STD_LOG(i0011, []),
@@ -1273,10 +1277,12 @@ open_all_manifest([], RootPath, CDBOpts) ->
         true
     );
 open_all_manifest(Man0, RootPath, CDBOpts) ->
+    OnDiskJournalSet =
+        sets:from_list(get_all_completejournals(RootPath), [{version, 2}]),
     Man1 = leveled_imanifest:to_list(Man0),
     [{HeadSQN, HeadFN, _IgnorePid, HeadLK} | ManifestTail] = Man1,
     OpenJournalFun =
-        fun(ManEntry) ->
+        fun(ManEntry, Acc) ->
             {LowSQN, FN, _, LK_RO} = ManEntry,
             CFN = FN ++ "." ++ ?JOURNAL_FILEX,
             PFN = FN ++ "." ++ ?PENDING_FILEX,
@@ -1284,40 +1290,80 @@ open_all_manifest(Man0, RootPath, CDBOpts) ->
                 true ->
                     {ok, Pid} =
                         leveled_cdb:cdb_reopen_reader(CFN, LK_RO, CDBOpts),
-                    {LowSQN, FN, Pid, LK_RO};
+                    {
+                        {LowSQN, FN, Pid, LK_RO},
+                        sets:del_element(CFN, Acc)
+                    };
                 false ->
-                    W = leveled_cdb:cdb_open_writer(PFN, CDBOpts),
-                    {ok, Pid} = W,
+                    {ok, Pid} = leveled_cdb:cdb_open_writer(PFN, CDBOpts),
                     ok = leveled_cdb:cdb_roll(Pid),
                     LK_WR = leveled_cdb:cdb_lastkey(Pid),
-                    {LowSQN, FN, Pid, LK_WR}
+                    {
+                        {LowSQN, FN, Pid, LK_WR},
+                        Acc
+                    }
             end
         end,
-    OpenedTailAsList = lists:map(OpenJournalFun, ManifestTail),
+    {
+        OpenedTailAsList,
+        FilteredOnDiskJournalSet
+    } =
+        lists:mapfoldl(OpenJournalFun, OnDiskJournalSet, ManifestTail),
     OpenedTail = leveled_imanifest:from_list(OpenedTailAsList),
     CompleteHeadFN = HeadFN ++ "." ++ ?JOURNAL_FILEX,
     PendingHeadFN = HeadFN ++ "." ++ ?PENDING_FILEX,
-    case filelib:is_file(CompleteHeadFN) of
-        true ->
-            ?STD_LOG(i0012, [HeadFN]),
-            {ok, HeadR} = leveled_cdb:cdb_open_reader(CompleteHeadFN),
-            LastKey = {LastSQN, _, _} = leveled_cdb:cdb_lastkey(HeadR),
-            ManToHead =
+    StartedManifest =
+        case filelib:is_file(CompleteHeadFN) of
+            true ->
+                ?STD_LOG(i0012, [HeadFN]),
+                {ok, HeadR} = leveled_cdb:cdb_open_reader(CompleteHeadFN),
+                LastKey = {LastSQN, _, _} = leveled_cdb:cdb_lastkey(HeadR),
+                ManToHead =
+                    leveled_imanifest:add_entry(
+                        OpenedTail,
+                        {HeadSQN, HeadFN, HeadR, LastKey},
+                        true
+                    ),
+                NewManEntry =
+                    start_new_activejournal(LastSQN + 1, RootPath, CDBOpts),
+                leveled_imanifest:add_entry(ManToHead, NewManEntry, true);
+            false ->
+                {ok, HeadW} =
+                    leveled_cdb:cdb_open_writer(PendingHeadFN, CDBOpts),
                 leveled_imanifest:add_entry(
-                    OpenedTail,
-                    {HeadSQN, HeadFN, HeadR, LastKey},
-                    true
-                ),
-            NewManEntry =
-                start_new_activejournal(LastSQN + 1, RootPath, CDBOpts),
-            leveled_imanifest:add_entry(ManToHead, NewManEntry, true);
-        false ->
-            {ok, HeadW} =
-                leveled_cdb:cdb_open_writer(PendingHeadFN, CDBOpts),
-            leveled_imanifest:add_entry(
-                OpenedTail, {HeadSQN, HeadFN, HeadW, HeadLK}, true
-            )
-    end.
+                    OpenedTail, {HeadSQN, HeadFN, HeadW, HeadLK}, true
+                )
+        end,
+    lists:foreach(
+        fun(FN) ->
+            NewName =
+                filename:flatten([filename:rootname(FN), "." ++ ?ARCHIVE_FILEX]),
+            ?STD_LOG(i0029, [FN]),
+            file:rename(FN, NewName)
+        end,
+        sets:to_list(
+            sets:del_element(CompleteHeadFN, FilteredOnDiskJournalSet)
+        )
+    ),
+    StartedManifest.
+
+-spec get_all_completejournals(string()) -> list(file:filename()).
+get_all_completejournals(RootPath) ->
+    JFiles = list_dir(filepath(RootPath, journal_dir)),
+    CFiles = list_dir(filepath(RootPath, journal_compact_dir)),
+    lists:filter(
+        fun(FN) ->
+            filename:extension(FN) == ("." ++ ?JOURNAL_FILEX)
+        end,
+        JFiles ++ CFiles
+    ).
+
+-spec list_dir(string()) -> list(file:filename()).
+list_dir(Path) ->
+    {ok, Files} = file:list_dir(Path),
+    lists:map(
+        fun(FN) -> filename:join(Path, FN) end, Files
+    ).
 
 start_new_activejournal(SQN, RootPath, CDBOpts) ->
     Filename = filepath(RootPath, SQN, new_journal),
@@ -1530,18 +1576,33 @@ build_dummy_journal(KeyConvertF) ->
     ok = filelib:ensure_dir(ManifestFP),
     F1 = filename:join(JournalFP, "nursery_1.pnd"),
     {ok, J1} = leveled_cdb:cdb_open_writer(F1),
+    %% Load some dummmy keys to avoid timing issues when scenarios are not
+    %% triggered due to hashtable being calculated too fast
+    lists:foreach(
+        fun(I) ->
+            DK = lists:flatten(io_lib:format("DummmyK~6..0w", [I])),
+            DV = lists:flatten(io_lib:format("TestValue~6..0w", [I])),
+            leveled_cdb:cdb_put(
+                J1,
+                {I, stnd, KeyConvertF(DK)},
+                create_value_for_journal({DV, ?TEST_KC}, false)
+            )
+        end,
+        lists:seq(1, 1000)
+    ),
+
     {K1, V1} = {KeyConvertF("Key1"), "TestValue1"},
     {K2, V2} = {KeyConvertF("Key2"), "TestValue2"},
     ok =
         leveled_cdb:cdb_put(
             J1,
-            {1, stnd, K1},
+            {1001, stnd, K1},
             create_value_for_journal({V1, ?TEST_KC}, false)
         ),
     ok =
         leveled_cdb:cdb_put(
             J1,
-            {2, stnd, K2},
+            {1002, stnd, K2},
             create_value_for_journal({V2, ?TEST_KC}, false)
         ),
     ok = leveled_cdb:cdb_roll(J1),
@@ -1572,20 +1633,20 @@ build_dummy_journal(KeyConvertF) ->
     ok =
         leveled_cdb:cdb_put(
             J2,
-            {3, stnd, K1},
+            {1003, stnd, K1},
             create_value_for_journal({V3, ?TEST_KC}, false)
         ),
     ok =
         leveled_cdb:cdb_put(
             J2,
-            {4, stnd, K4},
+            {1004, stnd, K4},
             create_value_for_journal({V4, ?TEST_KC}, false)
         ),
     LK2 = leveled_cdb:cdb_lastkey(J2),
     ok = leveled_cdb:cdb_close(J2),
     Manifest = [
         {1, "test/test_area/journal/journal_files/nursery_1", "pid1", LK1},
-        {3, "test/test_area/journal/journal_files/nursery_3", "pid2", LK2}
+        {1003, "test/test_area/journal/journal_files/nursery_3", "pid2", LK2}
     ],
     ManifestBin = term_to_binary(Manifest),
     {ok, MF1} = file:open(
@@ -1625,12 +1686,12 @@ simple_inker_test() ->
         compression_method = native,
         compress_on_receipt = true
     }),
-    Obj1 = ink_get(Ink1, key_converter("Key1"), 1),
-    ?assertMatch(Obj1, {{1, key_converter("Key1")}, {"TestValue1", ?TEST_KC}}),
-    Obj3 = ink_get(Ink1, key_converter("Key1"), 3),
-    ?assertMatch(Obj3, {{3, key_converter("Key1")}, {"TestValue3", ?TEST_KC}}),
-    Obj4 = ink_get(Ink1, key_converter("Key4"), 4),
-    ?assertMatch(Obj4, {{4, key_converter("Key4")}, {"TestValue4", ?TEST_KC}}),
+    Obj1 = ink_get(Ink1, key_converter("Key1"), 1001),
+    ?assertMatch(Obj1, {{1001, key_converter("Key1")}, {"TestValue1", ?TEST_KC}}),
+    Obj3 = ink_get(Ink1, key_converter("Key1"), 1003),
+    ?assertMatch(Obj3, {{1003, key_converter("Key1")}, {"TestValue3", ?TEST_KC}}),
+    Obj4 = ink_get(Ink1, key_converter("Key4"), 1004),
+    ?assertMatch(Obj4, {{1004, key_converter("Key4")}, {"TestValue4", ?TEST_KC}}),
     ink_close(Ink1),
     clean_testdir(RootPath).
 
@@ -1651,10 +1712,10 @@ simple_inker_completeactivejournal_test() ->
         compression_method = native,
         compress_on_receipt = true
     }),
-    Obj1 = ink_get(Ink1, key_converter("Key1"), 1),
-    ?assertMatch(Obj1, {{1, key_converter("Key1")}, {"TestValue1", ?TEST_KC}}),
-    Obj2 = ink_get(Ink1, key_converter("Key4"), 4),
-    ?assertMatch(Obj2, {{4, key_converter("Key4")}, {"TestValue4", ?TEST_KC}}),
+    Obj1 = ink_get(Ink1, key_converter("Key1"), 1001),
+    ?assertMatch(Obj1, {{1001, key_converter("Key1")}, {"TestValue1", ?TEST_KC}}),
+    Obj2 = ink_get(Ink1, key_converter("Key4"), 1004),
+    ?assertMatch(Obj2, {{1004, key_converter("Key4")}, {"TestValue4", ?TEST_KC}}),
     ink_close(Ink1),
     clean_testdir(RootPath).
 
@@ -1692,12 +1753,12 @@ compact_journal_testto(WRP, ExpectedFiles) ->
         {[], infinity},
         true
     ),
-    ?assertMatch(NewSQN1, 5),
+    ?assertMatch(NewSQN1, 1005),
     ok = ink_printmanifest(Ink1),
-    R0 = ink_get(Ink1, test_ledgerkey("KeyAA"), 5),
+    R0 = ink_get(Ink1, test_ledgerkey("KeyAA"), 1005),
     ?assertMatch(
         R0,
-        {{5, test_ledgerkey("KeyAA")}, {"TestValueAA", {[], infinity}}}
+        {{1005, test_ledgerkey("KeyAA")}, {"TestValueAA", {[], infinity}}}
     ),
     FunnyLoop = lists:seq(1, 48),
     Checker = lists:map(
@@ -1721,14 +1782,14 @@ compact_journal_testto(WRP, ExpectedFiles) ->
         {[], infinity},
         true
     ),
-    ?assertMatch(NewSQN2, 54),
+    ?assertMatch(NewSQN2, 1054),
     ActualManifest = ink_getmanifest(Ink1),
     ok = ink_printmanifest(Ink1),
     ?assertMatch(3, length(ActualManifest)),
     {ok, _ICL1} = ink_compactjournal(
         Ink1,
         Checker,
-        fun(X) -> {X, 55} end,
+        fun(X) -> {X, 1055} end,
         fun(_F) -> ok end,
         fun(L, K, SQN) ->
             case lists:member({SQN, K}, L) of
@@ -1745,7 +1806,7 @@ compact_journal_testto(WRP, ExpectedFiles) ->
     {ok, _ICL2} = ink_compactjournal(
         Ink1,
         Checker2,
-        fun(X) -> {X, 55} end,
+        fun(X) -> {X, 1055} end,
         fun(_F) -> ok end,
         fun(L, K, SQN) ->
             case lists:member({SQN, K}, L) of
