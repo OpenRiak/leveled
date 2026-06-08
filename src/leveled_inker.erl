@@ -1576,18 +1576,33 @@ build_dummy_journal(KeyConvertF) ->
     ok = filelib:ensure_dir(ManifestFP),
     F1 = filename:join(JournalFP, "nursery_1.pnd"),
     {ok, J1} = leveled_cdb:cdb_open_writer(F1),
+    %% Load some dummmy keys to avoid timing issues when scenarios are not
+    %% triggered due to hashtable being calculated too fast
+    lists:foreach(
+        fun(I) ->
+            DK = lists:flatten(io_lib:format("DummmyK~6..0w", [I])),
+            DV = lists:flatten(io_lib:format("TestValue~6..0w", [I])),
+            leveled_cdb:cdb_put(
+                J1,
+                {I, stnd, KeyConvertF(DK)},
+                create_value_for_journal({DV, ?TEST_KC}, false)
+            )
+        end,
+        lists:seq(1, 1000)
+    ),
+
     {K1, V1} = {KeyConvertF("Key1"), "TestValue1"},
     {K2, V2} = {KeyConvertF("Key2"), "TestValue2"},
     ok =
         leveled_cdb:cdb_put(
             J1,
-            {1, stnd, K1},
+            {1001, stnd, K1},
             create_value_for_journal({V1, ?TEST_KC}, false)
         ),
     ok =
         leveled_cdb:cdb_put(
             J1,
-            {2, stnd, K2},
+            {1002, stnd, K2},
             create_value_for_journal({V2, ?TEST_KC}, false)
         ),
     ok = leveled_cdb:cdb_roll(J1),
@@ -1618,20 +1633,20 @@ build_dummy_journal(KeyConvertF) ->
     ok =
         leveled_cdb:cdb_put(
             J2,
-            {3, stnd, K1},
+            {1003, stnd, K1},
             create_value_for_journal({V3, ?TEST_KC}, false)
         ),
     ok =
         leveled_cdb:cdb_put(
             J2,
-            {4, stnd, K4},
+            {1004, stnd, K4},
             create_value_for_journal({V4, ?TEST_KC}, false)
         ),
     LK2 = leveled_cdb:cdb_lastkey(J2),
     ok = leveled_cdb:cdb_close(J2),
     Manifest = [
         {1, "test/test_area/journal/journal_files/nursery_1", "pid1", LK1},
-        {3, "test/test_area/journal/journal_files/nursery_3", "pid2", LK2}
+        {1003, "test/test_area/journal/journal_files/nursery_3", "pid2", LK2}
     ],
     ManifestBin = term_to_binary(Manifest),
     {ok, MF1} = file:open(
@@ -1671,12 +1686,12 @@ simple_inker_test() ->
         compression_method = native,
         compress_on_receipt = true
     }),
-    Obj1 = ink_get(Ink1, key_converter("Key1"), 1),
-    ?assertMatch(Obj1, {{1, key_converter("Key1")}, {"TestValue1", ?TEST_KC}}),
-    Obj3 = ink_get(Ink1, key_converter("Key1"), 3),
-    ?assertMatch(Obj3, {{3, key_converter("Key1")}, {"TestValue3", ?TEST_KC}}),
-    Obj4 = ink_get(Ink1, key_converter("Key4"), 4),
-    ?assertMatch(Obj4, {{4, key_converter("Key4")}, {"TestValue4", ?TEST_KC}}),
+    Obj1 = ink_get(Ink1, key_converter("Key1"), 1001),
+    ?assertMatch(Obj1, {{1001, key_converter("Key1")}, {"TestValue1", ?TEST_KC}}),
+    Obj3 = ink_get(Ink1, key_converter("Key1"), 1003),
+    ?assertMatch(Obj3, {{1003, key_converter("Key1")}, {"TestValue3", ?TEST_KC}}),
+    Obj4 = ink_get(Ink1, key_converter("Key4"), 1004),
+    ?assertMatch(Obj4, {{1004, key_converter("Key4")}, {"TestValue4", ?TEST_KC}}),
     ink_close(Ink1),
     clean_testdir(RootPath).
 
@@ -1697,10 +1712,10 @@ simple_inker_completeactivejournal_test() ->
         compression_method = native,
         compress_on_receipt = true
     }),
-    Obj1 = ink_get(Ink1, key_converter("Key1"), 1),
-    ?assertMatch(Obj1, {{1, key_converter("Key1")}, {"TestValue1", ?TEST_KC}}),
-    Obj2 = ink_get(Ink1, key_converter("Key4"), 4),
-    ?assertMatch(Obj2, {{4, key_converter("Key4")}, {"TestValue4", ?TEST_KC}}),
+    Obj1 = ink_get(Ink1, key_converter("Key1"), 1001),
+    ?assertMatch(Obj1, {{1001, key_converter("Key1")}, {"TestValue1", ?TEST_KC}}),
+    Obj2 = ink_get(Ink1, key_converter("Key4"), 1004),
+    ?assertMatch(Obj2, {{1004, key_converter("Key4")}, {"TestValue4", ?TEST_KC}}),
     ink_close(Ink1),
     clean_testdir(RootPath).
 
@@ -1738,12 +1753,12 @@ compact_journal_testto(WRP, ExpectedFiles) ->
         {[], infinity},
         true
     ),
-    ?assertMatch(NewSQN1, 5),
+    ?assertMatch(NewSQN1, 1005),
     ok = ink_printmanifest(Ink1),
-    R0 = ink_get(Ink1, test_ledgerkey("KeyAA"), 5),
+    R0 = ink_get(Ink1, test_ledgerkey("KeyAA"), 1005),
     ?assertMatch(
         R0,
-        {{5, test_ledgerkey("KeyAA")}, {"TestValueAA", {[], infinity}}}
+        {{1005, test_ledgerkey("KeyAA")}, {"TestValueAA", {[], infinity}}}
     ),
     FunnyLoop = lists:seq(1, 48),
     Checker = lists:map(
@@ -1767,14 +1782,14 @@ compact_journal_testto(WRP, ExpectedFiles) ->
         {[], infinity},
         true
     ),
-    ?assertMatch(NewSQN2, 54),
+    ?assertMatch(NewSQN2, 1054),
     ActualManifest = ink_getmanifest(Ink1),
     ok = ink_printmanifest(Ink1),
     ?assertMatch(3, length(ActualManifest)),
     {ok, _ICL1} = ink_compactjournal(
         Ink1,
         Checker,
-        fun(X) -> {X, 55} end,
+        fun(X) -> {X, 1055} end,
         fun(_F) -> ok end,
         fun(L, K, SQN) ->
             case lists:member({SQN, K}, L) of
@@ -1791,7 +1806,7 @@ compact_journal_testto(WRP, ExpectedFiles) ->
     {ok, _ICL2} = ink_compactjournal(
         Ink1,
         Checker2,
-        fun(X) -> {X, 55} end,
+        fun(X) -> {X, 1055} end,
         fun(_F) -> ok end,
         fun(L, K, SQN) ->
             case lists:member({SQN, K}, L) of
