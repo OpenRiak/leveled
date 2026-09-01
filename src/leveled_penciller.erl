@@ -770,7 +770,7 @@ handle_call(
                     true ->
                         LedgerTable;
                     false ->
-                        leveled_tree:from_orderedset(LedgerTable, ?CACHE_TYPE)
+                        leveled_tree:from_ets(LedgerTable, ?CACHE_TYPE)
                 end,
             case
                 leveled_pmem:add_to_cache(
@@ -877,7 +877,7 @@ handle_call(
                     fun(LKV) ->
                         CheckSeg =
                             leveled_sst:extract_hash(
-                                leveled_codec:strip_to_segmentonly(LKV)
+                                leveled_codec:ledgermd_seg(element(2, LKV))
                             ),
                         case CheckSeg of
                             CheckSeg when
@@ -1863,7 +1863,7 @@ compare_to_sqn(ObjSQN, _SQN) when is_integer(ObjSQN) ->
     % confusion in snapshots.
     current;
 compare_to_sqn(Obj, SQN) ->
-    compare_to_sqn(leveled_codec:strip_to_seqonly(Obj), SQN).
+    compare_to_sqn(leveled_codec:ledgermd_sqn(element(2, Obj)), SQN).
 
 -spec maybelog_fetch_timing(
     leveled_monitor:monitor(),
@@ -2264,7 +2264,7 @@ maybe_pause_push(PCL, KL) ->
         lists:foldl(
             fun({K, V}, {AccSL, AccIdx, MinSQN, MaxSQN}) ->
                 UpdSL = [{K, V} | AccSL],
-                SQN = leveled_codec:strip_to_seqonly({K, V}),
+                SQN = leveled_codec:ledgermd_sqn(V),
                 H = leveled_codec:segment_hash(K),
                 UpdIdx = leveled_pmem:prepare_for_index(AccIdx, H),
                 {UpdSL, UpdIdx, min(SQN, MinSQN), max(SQN, MaxSQN)}
@@ -2894,14 +2894,14 @@ foldwithimm_simple_test() ->
         ],
     IMM2 = leveled_tree:from_orderedlist(lists:ukeysort(1, KL1A), ?CACHE_TYPE),
     IMMiter =
-        leveled_tree:match_range(
+        leveled_tree:between(
             {o, <<"Bucket1">>, <<"Key1">>, null},
             {o, null, null, null},
             IMM2
         ),
     AccFun =
         fun(K, V, Acc) ->
-            SQN = leveled_codec:strip_to_seqonly({K, V}),
+            SQN = leveled_codec:ledgermd_sqn(V),
             Acc ++ [{K, SQN}]
         end,
     Acc =
@@ -2954,7 +2954,7 @@ foldwithimm_simple_test() ->
     KL1B = [AddKV | KL1A],
     IMM3 = leveled_tree:from_orderedlist(lists:ukeysort(1, KL1B), ?CACHE_TYPE),
     IMMiterB =
-        leveled_tree:match_range(
+        leveled_tree:between(
             {o, <<"Bucket1">>, <<"Key1">>, null},
             {o, null, null, null},
             IMM3

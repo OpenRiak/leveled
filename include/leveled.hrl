@@ -11,7 +11,8 @@
 %%% Configurable startup defaults
 %%%============================================================================
 -define(CACHE_SIZE, 2500).
--define(MAX_CACHE_MULTTIPLE, 2).
+-define(MAX_CACHE_MULTIPLE, 2).
+-define(MAX_SQN_MULTIPLE, 4).
 -define(MIN_CACHE_SIZE, 100).
 -define(MIN_PCL_CACHE_SIZE, 400).
 -define(MAX_PCL_CACHE_SIZE, 28000).
@@ -32,6 +33,7 @@
 -define(DEFAULT_STATS_PERC, 10).
 -define(DEFAULT_SYNC_STRATEGY, none).
 -define(DEFAULT_BLOCK_VERSION, 1).
+-define(LEDGER_VALUE_VERSION, 3).
 %%%============================================================================
 
 %%%============================================================================
@@ -49,7 +51,7 @@
 -define(MIN_KEYCHECK_FREQUENCY, 1).
 -define(MAX_LEVELS, 8).
 %% Should equal the length of the LEVEL_SCALEFACTOR
--define(CACHE_TYPE, skpl).
+-define(CACHE_TYPE, idxt).
 %%%============================================================================
 
 %%%============================================================================
