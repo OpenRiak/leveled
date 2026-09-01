@@ -149,7 +149,7 @@ bucket_list(SnapFun, Tag, FoldBucketsFun, InitAcc, MaxBuckets) ->
 %% This has the special capability that it will expect a message to be thrown
 %% during the query - and handle this without crashing the penciller snapshot
 %% This allows for this query to be used with a max_results check in the
-%% applictaion - and to throw a stop message to be caught by the worker
+%% application - and to throw a stop message to be caught by the worker
 %% handling the runner.  This behaviour will not prevent the snapshot from
 %% closing neatly, allowing delete_pending files to be cleared without waiting
 %% for a timeout
@@ -722,8 +722,7 @@ accumulate_objects(FoldObjectsFun, InkerClone, Tag, DeferredFetch) ->
             % a fold_objects), then a metadata object needs to be built to be
             % returned - but a quick check that Key is present in the Journal
             % is made first
-            {SQN, _St, _MH, MD} =
-                leveled_codec:striphead_to_v1details(V),
+            {SQN, MD} = leveled_codec:ledgermd_sqnumd(V),
             {B, K} =
                 case leveled_codec:from_ledgerkey(LK) of
                     {B0, K0} ->
@@ -766,8 +765,8 @@ accumulate_objects(FoldObjectsFun, InkerClone, Tag, DeferredFetch) ->
     AccFun.
 
 check_presence(Key, Value, InkerClone) ->
-    {LedgerKey, SQN} = leveled_codec:strip_to_keyseqonly({Key, Value}),
-    case leveled_inker:ink_keycheck(InkerClone, LedgerKey, SQN) of
+    SQN = leveled_codec:ledgermd_sqn(Value),
+    case leveled_inker:ink_keycheck(InkerClone, Key, SQN) of
         probably ->
             true;
         missing ->
