@@ -51,7 +51,7 @@
 -record(state, {
     owner :: pid() | undefined,
     root_path :: string() | undefined,
-    pending_deletions = dict:new() :: dict:dict(),
+    pending_deletions = maps:new() :: map(),
     sst_options :: sst_options()
 }).
 
@@ -137,7 +137,7 @@ handle_cast(
 ->
     {ManifestSQN, Deletions} =
         handle_work(Work, RP, State#state.sst_options, PCL),
-    PDs = dict:store(ManifestSQN, Deletions, State#state.pending_deletions),
+    PDs = maps:put(ManifestSQN, Deletions, State#state.pending_deletions),
     ?STD_LOG(pc022, [ManifestSQN]),
     {noreply, State#state{pending_deletions = PDs}, ?MIN_TIMEOUT};
 handle_cast(
@@ -526,16 +526,16 @@ grooming_scorer(HighestTC, BestME, [ME | MEs]) ->
     end.
 
 return_deletions(ManifestSQN, PendingDeletionD) ->
-    % The returning of deletions had been seperated out as a failure to fetch
-    % here had caased crashes of the clerk.  The root cause of the failure to
+    % The returning of deletions had been separated out as a failure to fetch
+    % here had caused crashes of the clerk.  The root cause of the failure to
     % fetch was the same clerk being asked to do the same work twice - and this
     % should be blocked now by the ongoing_work boolean in the Penciller
     % LoopData
     %
     % So this is now allowed to crash again
-    PendingDeletions = dict:fetch(ManifestSQN, PendingDeletionD),
+    PendingDeletions = maps:get(ManifestSQN, PendingDeletionD),
     ?STD_LOG(pc021, [ManifestSQN]),
-    {PendingDeletions, dict:erase(ManifestSQN, PendingDeletionD)}.
+    {PendingDeletions, maps:remove(ManifestSQN, PendingDeletionD)}.
 
 %%%============================================================================
 %%% Test
